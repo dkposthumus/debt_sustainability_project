@@ -592,8 +592,8 @@ b0 = 1.21  # initial debt level
  
 # for different levels of c, run the simulation 
 d_dict = {
-    'irresponsible': 0.33,
-    'responsible': 0.67
+    'irresponsible': 0,
+    'responsible': 0.15
 }
 beta_r_dict = {
     'No Feedback': 0.0,
@@ -604,6 +604,7 @@ beta_r_dict = {
 
 # Precompute global y-limits for each plot type
 ylim_dict = {
+    'g': [],
     "r": [],
     "rg": [],
     "b": [],
@@ -669,7 +670,28 @@ for label, c_val in d_dict.items():
             label=label
         )
     # now plot the results 
-    # first, plot path of interest rates 
+    # first plot the path of growth 
+    plt.figure(figsize=(12, 8))
+    for beta_r_label, beta_r in beta_r_dict.items():
+        df_sim = sim_results[beta_r]
+        df_mean = df_sim.groupby('year').agg(
+            g_median=('g', 'median'),
+            g_25th=('g', lambda x: np.percentile(x, 25)),
+            g_75th=('g', lambda x: np.percentile(x, 75))
+        ).reset_index()
+        plt.plot(df_mean['year'], df_mean['g_median'], label=f'beta_r = {beta_r} ({beta_r_label})')
+        plt.fill_between(df_mean['year'], df_mean['g_25th'], df_mean['g_75th'], alpha=0.2)
+    plt.xlabel('Year')
+    plt.ylabel('Growth Rate (g)')
+    plt.title(f'Median and Percentiles of Growth Rate (g) - {label.title()} Fiscal Regime')
+    plt.legend(loc='best', fontsize='x-large')
+    plt.grid()
+    plt.ylim(*ylim_bounds["g"])
+    plt.tight_layout()
+    plt.savefig(graphics_path / f'sdsa_growth_{label}.png', dpi=300)
+    plt.show()
+
+    # plot path of interest rates 
     plt.figure(figsize=(12, 8))
     for beta_r_label, beta_r in beta_r_dict.items():
         df_sim = sim_results[beta_r]
