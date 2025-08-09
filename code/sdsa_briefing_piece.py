@@ -1,0 +1,193 @@
+import pandas as pd 
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+from fredapi import Fred
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from adjustText import adjust_text
+import numpy as np
+from pathlib import Path
+from scipy.signal import savgol_filter
+
+# let's create a set of locals referring to our directory and working directory 
+home = Path.home()
+work_dir = (home / 'debt_sustainability_project')
+data = (work_dir / 'data')
+raw_data = (data / 'sdsa' / 'raw')
+output = (work_dir / 'output' / 'sdsa' / 'graphics' / 'other')
+code = Path.cwd() 
+
+################################################################################
+# Define relevant functions
+################################################################################
+# set matplotlib style 
+plt.style.use('mahoney_lab.mplstyle')
+
+fred = Fred(api_key='8905b2f5faefd705486e644f09bb8088')
+def get_fred_series(series_id, series_name):
+    """
+    Helper function to fetch a series from FRED and return it as a DataFrame.
+    """
+    data = fred.get_series(series_id)
+    df = pd.DataFrame(data, columns=[series_name])
+    df.index = pd.to_datetime(df.index)
+    df.reset_index(inplace=True)
+    df.rename(columns={'index': 'date'}, inplace=True)
+    return df
+
+def add_recession_bars(ax, recession_df, shortened=False):
+    if shortened:
+        copy = recession_df[recession_df['date'] >= '1992-01-01']
+    else:
+        copy = recession_df.copy()
+    in_recession = False
+    for i in range(len(copy)):
+        if copy['recession'].iloc[i] == 1 and not in_recession:
+            start_date = copy['date'].iloc[i]
+            in_recession = True
+        elif copy['recession'].iloc[i] == 0 and in_recession:
+            end_date = copy['date'].iloc[i]
+            ax.axvspan(start_date, end_date, color='gray', alpha=0.3)
+            in_recession = False
+    if in_recession:
+        end_date = copy['date'].iloc[-1]
+        ax.axvspan(start_date, end_date, color='gray', alpha=0.3)
+
+def add_footnote_text(source_text):
+    foot_y = 0
+    plt.figtext(0.01, foot_y, "Sources:", fontfamily="Times New Roman",
+                fontweight="bold", fontsize=8, ha="left", va="bottom")
+    plt.figtext(0.075, foot_y, source_text, fontfamily="Times New Roman",
+                fontsize=8, ha="left", va="bottom")
+
+recession_df = get_fred_series('USRECD', 'recession')
+filtered_recession_df = recession_df[recession_df['date'] >= '1962-01-01']
+
+################################################################################
+# Plot Natural Interest Rate
+################################################################################
+natural_interest_rate = pd.read_excel(raw_data / 'natural_interest_rate.xlsx', 
+                                      sheet_name='HLW Estimates', skiprows=5)
+natural_interest_rate.columns = natural_interest_rate.columns.str.lower()
+natural_interest_rate.rename(
+    columns = {
+        'us.2': 'us_natural_interest rate'
+    }, inplace=True
+)
+natural_interest_rate['date'] = pd.to_datetime(natural_interest_rate['date'])
+# plot annual interest rate, the full historical series
+plt.figure(figsize=(12, 8))
+plt.plot(natural_interest_rate['date'], 
+         natural_interest_rate['us_natural_interest rate'],
+         label='Natural Interest Rate (HLW Model)', color='blue', alpha=0.75)
+# add recession bars
+add_recession_bars(plt.gca(), filtered_recession_df)
+plt.title('Natural Interest Rate in the US (1962-2023)')
+plt.ylabel('Natural Interest Rate (%)')
+plt.grid(True)
+plt.legend(fontsize='x-large', loc='best')
+plt.tight_layout()
+plt.savefig(output / 'natural_interest_rate_full.pdf', dpi=300)
+plt.show()
+
+natural_interest_rate = natural_interest_rate[natural_interest_rate['date'] >= '2004-01-01']
+plt.figure(figsize=(12, 8))
+plt.plot(natural_interest_rate['date'], 
+         natural_interest_rate['us_natural_interest rate'],
+         label='Natural Interest Rate (HLW Model)', color='blue', alpha=0.75)
+# add horizontal line at post-GFC average, with text label
+post_gfc_start = pd.to_datetime('2009-01-01')
+post_gfc_data = natural_interest_rate[natural_interest_rate['date'] >= post_gfc_start]
+average_post_gfc_rate = post_gfc_data['us_natural_interest rate'].mean()
+plt.axhline(average_post_gfc_rate, color='green', linestyle='--', 
+            label='Post-GFC Average Rate: {:.2f}%'.format(average_post_gfc_rate))
+plt.text(pd.to_datetime('2013-06-01'), 
+         average_post_gfc_rate + 0.15, 
+         'Post-GFC Average Rate: {:.2f}%'.format(average_post_gfc_rate),
+         color='green', fontsize=25, ha='center', va='bottom')
+plt.title('Natural Interest Rate in the US')
+plt.ylabel('Natural Interest Rate (%)')
+plt.grid(True)
+shortened = recession_df[recession_df['date'] >= '2004-01-01']
+add_recession_bars(plt.gca(), shortened)
+plt.legend(fontsize='x-large', loc='best')
+plt.tight_layout()
+plt.savefig(output / 'natural_interest_rate.pdf', dpi=300)
+plt.show()
+
+################################################################################
+# Historical Curvature of the Debt Path
+################################################################################
+def curvature_savgol(b_series, window_length=9, polyorder=2, use_log=False):
+    """
+    b_series: 1D array-like (level, e.g., debt/GDP in decimals)
+    window_length: odd int >= 3
+    polyorder: typically 2 or 3
+    use_log: if True, apply SG to log(b); then slope≈growth rate, curvature≈change in growth
+    """
+    x = np.asarray(b_series, dtype=float)
+    if use_log:
+        if np.any(x <= 0):
+            raise ValueError("use_log=True requires strictly positive series.")
+        x = np.log(x)
+
+    # enforce odd window <= len(x) and > polyorder
+    w = window_length if window_length % 2 == 1 else window_length + 1
+    w = min(w, len(x) - 1 if (len(x) % 2 == 0) else len(x))  # largest odd ≤ len(x)
+    if w < 3: 
+        raise ValueError("Series too short for Savitzky–Golay smoothing.")
+    if w <= polyorder:
+        polyorder = max(1, min(polyorder, w - 1))
+
+    slope = savgol_filter(x, w, polyorder, deriv=1, delta=1.0, mode='interp')
+    curv  = savgol_filter(x, w, polyorder, deriv=2, delta=1.0, mode='interp')
+    return slope, curv
+
+debt = get_fred_series('FYGFGDQ188S', 'Federal Debt Held by the Public')
+debt.columns = debt.columns.str.lower()
+debt.rename(columns={'federal debt held by the public': 'debt'}, inplace=True)
+debt['debt'] = debt['debt'] / 100.0  # percent → decimal
+
+# keep one observation per year (Q4). Many FRED quarter stamps are quarter-start dates; Q4==October works.
+debt_q4 = debt[debt['date'].dt.month == 10].sort_values('date').copy()
+
+# --- 3) Apply Savitzky–Golay derivatives ---
+# (A) Curvature of the *level* series (units: “per year^2” of debt/GDP)
+slope_sg, curv_sg = curvature_savgol(debt_q4['debt'], window_length=3, polyorder=2, use_log=False)
+debt_q4['slope_sg'] = slope_sg
+debt_q4['curvature_sg'] = curv_sg
+
+# (B) Curvature of *log(debt)* (scale-free; think growth-rate and change-in-growth)
+slope_log_sg, curv_log_sg = curvature_savgol(debt_q4['debt'], window_length=9, polyorder=2, use_log=True)
+debt_q4['slope_log_sg'] = slope_log_sg         # ≈ d/dt ln b_t  (annual growth rate of debt/GDP)
+debt_q4['curvature_log_sg'] = curv_log_sg      # ≈ d^2/dt^2 ln b_t (change in growth)
+
+# plot smoothed and observed series together
+plt.figure(figsize=(12, 8))
+plt.plot(debt_q4['date'], debt_q4['debt'], label='Observed Debt/GDP (Q4)', color='black', alpha=0.5)
+plt.plot(debt_q4['date'], debt_q4['slope_sg'], label='Slope (SG, W=9, p=2)', color='blue', alpha=0.75)
+plt.plot(debt_q4['date'], debt_q4['curvature_sg'], label='Curvature (SG, W=9, p=2)', color='red', alpha=0.75)
+plt.axhline(0, color='black', linestyle='--', linewidth=0.8)
+plt.title('U.S. Debt Path with Savitzky–Golay Smoothing (Q4 observations)')
+plt.ylabel('Debt/GDP (level) and derivatives')
+plt.grid(True)
+filtered_recession_df = recession_df[recession_df['date'] >= debt_q4['date'].min()]
+add_recession_bars(plt.gca(), filtered_recession_df)
+plt.legend(loc='best')
+plt.tight_layout()
+plt.savefig(output / 'debt_savgol.pdf', dpi=300)
+plt.show()
+
+# --- 4) Plot (pick one of these two “curvatures” and use it everywhere, incl. your sims) ---
+plt.figure(figsize=(12, 8))
+plt.plot(debt_q4['date'], debt_q4['curvature_log_sg'], label='Curvature of log(debt/GDP) (SG, W=9, p=2)', alpha=0.85)
+plt.axhline(0, color='black', linestyle='--', linewidth=0.8)
+plt.title('Medium-run Curvature of U.S. Debt Path (Q4 observations)')
+plt.ylabel('Second derivative (per year²)')
+plt.grid(True)
+filtered_recession_df = recession_df[recession_df['date'] >= debt_q4['date'].min()]
+add_recession_bars(plt.gca(), filtered_recession_df)
+plt.legend(loc='best')
+plt.tight_layout()
+plt.savefig(output / 'debt_curvature_savgol_logQ4.pdf', dpi=300)
+plt.show()

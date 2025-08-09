@@ -5,6 +5,7 @@ import pandas as pd
 from fredapi import Fred
 from pathlib import Path
 import statsmodels.api as sm
+from scipy.signal import savgol_filter
 
 home = Path.home()
 work_dir = (home / 'debt_sustainability_project')
@@ -57,6 +58,24 @@ recession['date'] = pd.to_datetime(recession['date'])
 recession_df = recession[['date', 'recession']].copy()
 recession_df['date'] = pd.to_datetime(recession_df['date'])
 recession_df['recession'] = recession_df['recession'].astype(int)
+
+def _sg_deriv(series, window=9, poly=2, deriv=1, use_log=False):
+    x = series.to_numpy()
+    if use_log:
+        if (x <= 0).any():
+            raise ValueError("use_log=True requires strictly positive series.")
+        x = np.log(x)
+    # ensure odd window, valid for series length, and > poly
+    n = len(x)
+    w = window if window % 2 == 1 else window - 1
+    w = min(w, n if n % 2 == 1 else n - 1)
+    if w <= poly:
+        w = poly + 1 if (poly + 1) % 2 == 1 else poly + 2
+        w = min(w, n if n % 2 == 1 else n - 1)
+    return pd.Series(
+        savgol_filter(x, w, poly, deriv=deriv, delta=1.0, mode='interp'),
+        index=series.index
+    )
 
 ################################################################################
 ## 2. Calibrate / set parameters - random walk
@@ -136,7 +155,7 @@ plt.title('Distribution of 10-Year Change in Debt by c Value')
 plt.legend(loc='best', fontsize='x-large')
 plt.grid()
 plt.tight_layout()
-plt.savefig(f'{graphics_path}/sdsa_debt_random_walk_distributions.png', dpi=300)
+plt.savefig(f'{graphics_path}/sdsa_debt_random_walk_distributions.pdf', dpi=300)
 plt.show()
 
 # now collapse on the 25th, median, and 75th percentiles for each c value
@@ -158,7 +177,7 @@ plt.legend(loc='best', fontsize='x-large')
 plt.title('Median and Percentiles of Debt Level by c Value')
 plt.grid()
 plt.tight_layout()
-plt.savefig(f'{graphics_path}/sdsa_debt_random_walk_path.png', dpi=300)
+plt.savefig(f'{graphics_path}/sdsa_debt_random_walk_path.pdf', dpi=300)
 plt.show()
 # save and export df_sdsa 
 df_sdsa.to_csv(clean_data / 'sdsa_random_walk_results.csv', index=False)
@@ -231,7 +250,7 @@ plt.axhline(0, color='black', linestyle='--', linewidth=0.8)
 plt.legend(loc='best', fontsize='x-large')
 plt.grid(True)
 plt.tight_layout()
-plt.savefig(f'{graphics_path}/sdsa_random_walk_mean_rg.png', dpi=300)
+plt.savefig(f'{graphics_path}/sdsa_random_walk_mean_rg.pdf', dpi=300)
 plt.show()
 
 # Plot mean debt path
@@ -246,7 +265,7 @@ plt.ylabel("Debt (as % of GDP)")
 plt.legend(loc='best', fontsize='x-large')
 plt.grid(True)
 plt.tight_layout()
-plt.savefig(f'{graphics_path}/sdsa_random_walk_rg_varying_debt.png', dpi=300)
+plt.savefig(f'{graphics_path}/sdsa_random_walk_rg_varying_debt.pdf', dpi=300)
 plt.show()
 
 ################################################################################
@@ -324,7 +343,7 @@ plt.title('Historical Trends of r, g, and s (1992-Present)')
 plt.legend(loc='best', fontsize='x-large')
 plt.grid()
 plt.tight_layout()
-plt.savefig(output / 'historical_trends_rg_s.png', dpi=300)
+plt.savefig(output / 'historical_trends_rg_s.pdf', dpi=300)
 plt.show()
 
 # model estimation and calibration
@@ -451,7 +470,7 @@ for c_val, label in zip(
     plt.title(f'Median and Percentiles of Debt Level - {label.title()} Fiscal Regime')
     plt.grid()
     plt.tight_layout()
-    plt.savefig(f'{graphics_path}/sdsa_debt_{label}.png', dpi=300)
+    plt.savefig(f'{graphics_path}/sdsa_debt_{label}.pdf', dpi=300)
     plt.show()
 
     # now calculate the median/25th/75th percentile slope/curvature
@@ -479,7 +498,7 @@ for c_val, label in zip(
         plt.title(f'Mean {var.title()} of Debt Level - {label.title()} Fiscal Regime')
         plt.grid()
         plt.tight_layout()
-        plt.savefig(f'{graphics_path}/sdsa_debt_{label}_{var}.png', dpi=300)
+        plt.savefig(f'{graphics_path}/sdsa_debt_{label}_{var}.pdf', dpi=300)
         plt.show()
     
     # now plot distribution of curvature 
@@ -494,7 +513,7 @@ for c_val, label in zip(
     plt.legend(loc='best', fontsize='x-large')
     plt.grid()
     plt.tight_layout()
-    plt.savefig(f'{graphics_path}/sdsa_debt_{label}_curvature_distribution.png', dpi=300)
+    plt.savefig(f'{graphics_path}/sdsa_debt_{label}_curvature_distribution.pdf', dpi=300)
     plt.show()
 
 ################################################################################
@@ -596,10 +615,7 @@ d_dict = {
     'responsible': 0.15
 }
 beta_r_dict = {
-    'No Feedback': 0.0,
-    '2 bps': 0.02,
     '3 bps': 0.03,
-    '5 bps': 0.05,
 }
 
 # Precompute global y-limits for each plot type
@@ -609,7 +625,8 @@ ylim_dict = {
     "rg": [],
     "b": [],
     "slope": [],
-    "curvature": []
+    "curvature": [],
+    'interest_share': []
 }
 
 # First pass to collect limits
@@ -636,20 +653,29 @@ for c_val in d_dict.values():
             label=""
         )
         df_sim["rg"] = df_sim["r"] - df_sim["g"]
-        df_sim["slope"] = df_sim.groupby("sim")["b"].transform(np.gradient)
-        df_sim["curvature"] = df_sim.groupby("sim")["slope"].transform(np.gradient)
+        df_sim['slope'] = df_sim.groupby('sim', group_keys=False)['b'].apply(
+            lambda s: _sg_deriv(s, window=5, poly=2, use_log=False, deriv=1)
+        )
+        df_sim['curvature'] = df_sim.groupby('sim', group_keys=False)['slope'].apply(
+            lambda s: _sg_deriv(s, window=5, poly=2, use_log=False, deriv=1)
+        )
+        df_sim['interest_share'] = (
+                df_sim['r_av'] *
+                df_sim.groupby('sim')['b'].shift(1).fillna(b0)   # b_{t-1}; use b0 for t=1
+        )
         for var in ylim_dict:
             ylim_dict[var].extend(df_sim[var].values)
 
 # Final global limits
 ylim_bounds = {k: (np.percentile(v, 0.5), np.percentile(v, 99.5)) for k, v in ylim_dict.items()}
 
+c_basic_dict = {}
 for label, c_val in d_dict.items():
     print(f"Running simulations for c = {c_val} ({label.title()})")
     sim_results = {}
     for beta_r_label, beta_r in beta_r_dict.items():
         print(f"Running simulation for c = {c_val}, beta_r = {beta_r } ({beta_r_label})")
-        sim_results[beta_r] = simulate_scenario(
+        df_sim = simulate_scenario(
             c_val=c_val,
             a_s_vec=a_s,
             a_ug=a_ug,
@@ -669,6 +695,19 @@ for label, c_val in d_dict.items():
             a_u=None,
             label=label
         )
+        df_sim["rg"] = df_sim["r"] - df_sim["g"]
+        df_sim['slope'] = df_sim.groupby('sim', group_keys=False)['b'].apply(
+            lambda s: _sg_deriv(s, window=5, poly=2, use_log=False, deriv=1)
+        )
+        df_sim['curvature'] = df_sim.groupby('sim', group_keys=False)['b'].apply(
+            lambda s: _sg_deriv(s, window=5, poly=2, use_log=False, deriv=2)
+        )
+        df_sim['interest_share'] = (
+                df_sim['r_av'] *
+                df_sim.groupby('sim')['b'].shift(1).fillna(b0)   # b_{t-1}; use b0 for t=1
+        )
+        sim_results[beta_r] = df_sim
+        c_basic_dict[label] = df_sim
     # now plot the results 
     # first plot the path of growth 
     plt.figure(figsize=(12, 8))
@@ -688,7 +727,7 @@ for label, c_val in d_dict.items():
     plt.grid()
     plt.ylim(*ylim_bounds["g"])
     plt.tight_layout()
-    plt.savefig(graphics_path / f'sdsa_growth_{label}.png', dpi=300)
+    #plt.savefig(graphics_path / f'sdsa_growth_{label}.pdf', dpi=300)
     plt.show()
 
     # plot path of interest rates 
@@ -696,9 +735,9 @@ for label, c_val in d_dict.items():
     for beta_r_label, beta_r in beta_r_dict.items():
         df_sim = sim_results[beta_r]
         df_mean = df_sim.groupby('year').agg(
-            r_median=('r', 'median'),
-            r_25th=('r', lambda x: np.percentile(x, 25)),
-            r_75th=('r', lambda x: np.percentile(x, 75))
+            r_median=('r_av', 'median'),
+            r_25th=('r_av', lambda x: np.percentile(x, 25)),
+            r_75th=('r_av', lambda x: np.percentile(x, 75))
         ).reset_index()
         plt.plot(df_mean['year'], df_mean['r_median'], label=f'beta_r = {beta_r} ({beta_r_label})')
         plt.fill_between(df_mean['year'], df_mean['r_25th'], df_mean['r_75th'], alpha=0.2)
@@ -710,7 +749,7 @@ for label, c_val in d_dict.items():
     plt.grid()
     plt.ylim(*ylim_bounds["r"])
     plt.tight_layout()
-    plt.savefig(graphics_path / f'sdsa_interest_rate_{label}.png', dpi=300)
+    plt.savefig(graphics_path / f'sdsa_interest_rate_{label}.pdf', dpi=300)
     plt.show()
 
     # next plot path of r-g 
@@ -733,7 +772,7 @@ for label, c_val in d_dict.items():
     plt.grid()
     plt.ylim(*ylim_bounds["rg"])
     plt.tight_layout()
-    plt.savefig(graphics_path / f'sdsa_rg_{label}.png', dpi=300)
+    #plt.savefig(graphics_path / f'sdsa_rg_{label}.pdf', dpi=300)
     plt.show()
 
     # now plot the path of debt 
@@ -755,7 +794,29 @@ for label, c_val in d_dict.items():
     plt.grid()
     plt.ylim(*ylim_bounds["b"])
     plt.tight_layout()
-    plt.savefig(graphics_path / f'sdsa_debt_{label}.png', dpi=300)
+    plt.savefig(graphics_path / f'sdsa_debt_{label}.pdf', dpi=300)
+    plt.show()
+
+    # now plot the share of gdp that goes to debt servicing 
+    plt.figure(figsize=(12, 8))
+    for beta_r_label, beta_r in beta_r_dict.items():
+        df_sim = sim_results[beta_r]
+        df_mean = df_sim.groupby('year').agg(
+            interest_share_median=('interest_share', 'median'),
+            interest_share_25th=('interest_share', lambda x: np.percentile(x, 25)),
+            interest_share_75th=('interest_share', lambda x: np.percentile(x, 75))
+        ).reset_index()
+        plt.plot(df_mean['year'], df_mean['interest_share_median'], label=f'beta_r = {beta_r} ({beta_r_label})')
+        plt.fill_between(df_mean['year'], df_mean['interest_share_25th'], df_mean['interest_share_75th'], alpha=0.2)
+    plt.axhline(y=0.02, color='black', linestyle='--', label='2% Interest Share Threshold')
+    plt.xlabel('Year')
+    plt.ylabel('Interest Share of Debt Level (b)')
+    plt.title(f'Median and Percentiles of Interest Share of Debt Level (b) - {label.title()} Fiscal Regime')
+    plt.legend(loc='best', fontsize='x-large')
+    plt.grid()
+    plt.ylim(*ylim_bounds["interest_share"])
+    plt.tight_layout()
+    plt.savefig(graphics_path / f'sdsa_interest_share_{label}.pdf', dpi=300)
     plt.show()
 
     # now plot the slope and curvature of debt
@@ -778,7 +839,7 @@ for label, c_val in d_dict.items():
     plt.grid()
     plt.ylim(*ylim_bounds["slope"])
     plt.tight_layout()
-    plt.savefig(graphics_path / f'sdsa_debt_slope_{label}.png', dpi=300)
+    plt.savefig(graphics_path / f'sdsa_debt_slope_{label}.pdf', dpi=300)
     plt.show()
 
     # now plot the slope and curvature of debt
@@ -801,5 +862,74 @@ for label, c_val in d_dict.items():
     plt.grid()
     plt.ylim(*ylim_bounds["curvature"])
     plt.tight_layout()
-    plt.savefig(graphics_path / f'sdsa_debt_curvature_{label}.png', dpi=300)
+    plt.savefig(graphics_path / f'sdsa_debt_curvature_{label}.pdf', dpi=300)
     plt.show()
+
+regime_color = {
+    'irresponsible': 'crimson',
+    'responsible'  : 'forestgreen'
+}
+
+# plot together the level, slope, and curvature of debt -- directly comparing the two fiscal regimes
+for var in ['b', 'slope', 'curvature']:
+    plt.figure(figsize=(12, 8))
+    for label, c_val in d_dict.items():
+        df_sim = c_basic_dict[label]
+        df_mean = df_sim.groupby('year').agg(
+                median=(var, 'median'),
+                _25th=(var, lambda x: np.percentile(x, 25)),
+                _75th=(var, lambda x: np.percentile(x, 75))
+        ).reset_index()
+        plt.plot(df_mean['year'], df_mean['median'], 
+                     label=f'{label.title()} - c = {c_val}', 
+                     color=regime_color[label])
+        plt.fill_between(df_mean['year'], df_mean['_25th'], df_mean['_75th'], alpha=0.2, color=regime_color[label])
+    if var == 'b':
+        plt.axhline(y=b0, color='black', linestyle='--', label=f'Initial Debt Level ({b0})')
+    if var == 'curvature':
+        plt.axhline(y=0, color='black', linestyle='--', label='_nolegend_')
+    plt.xlabel('Year')
+    plt.ylabel(var.title())
+    plt.title(f'Median and Percentiles of {var.title()} - Fiscal Regime Comparison')
+    plt.legend(loc='best', fontsize='x-large')
+    plt.grid()
+    plt.tight_layout()
+    plt.savefig(graphics_path / f'sdsa_debt_{var}_comparison.pdf', dpi=300)
+    plt.show()
+
+# --- Historical 10y change (Q4-to-Q4) ---
+debt = get_fred_series('FYGFGDQ188S', 'Federal Debt Held by the Public')
+debt.columns = debt.columns.str.lower()
+debt.rename(columns={'federal debt held by the public': 'debt'}, inplace=True)
+debt['debt'] = debt['debt'] / 100.0
+debt_q4 = debt[debt['date'].dt.month == 10].sort_values('date').copy()
+
+# rolling 10-year change: b_t - b_{t-10}
+hist_changes = (debt_q4['debt'] - debt_q4['debt'].shift(10)).dropna().to_numpy()
+
+# --- Simulated 10y change per regime (last - first for each sim) ---
+changes = {}
+for label, c_val in d_dict.items():                    # e.g., {'irresponsible':0, 'responsible':0.15}
+    df_sim = c_basic_dict[label].sort_values(['sim','year'])
+    changes[label] = df_sim.groupby('sim')['b'].apply(lambda s: s.iloc[-1] - s.iloc[0]).to_numpy()
+
+# --- Common bins across all three distributions ---
+all_vals = np.concatenate([hist_changes] + [changes[k] for k in d_dict.keys()])
+bins = np.histogram_bin_edges(all_vals, bins=30)
+
+# --- Plot ---
+plt.figure(figsize=(12, 8))
+plt.hist(hist_changes, bins=bins, density=True, alpha=0.35,
+         label='History (Q4 rolling 10y)')
+for label, c_val in d_dict.items():
+    plt.hist(changes[label], bins=bins, density=True, alpha=0.35,
+             label=f'{label.title()} (c={c_val})')
+
+plt.xlabel('10-Year Change in Debt-to-GDP (Δb over 10y)')
+plt.ylabel('Density')
+plt.title('Distribution of 10-Year Change in Debt: History vs. Simulations')
+plt.legend(loc='best', fontsize='x-large')
+plt.grid(True)
+plt.tight_layout()
+plt.savefig(graphics_path / 'debt_change_10y_history_vs_sims.pdf', dpi=300)
+plt.show()
