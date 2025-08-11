@@ -83,7 +83,7 @@ def _sg_deriv(series, window=9, poly=2, deriv=1, use_log=False):
 graphics_path = output / 'sdsa_random_walk'
 x0 = 0 
 s_x = 0.003
-b0 = 1.21
+b0 = 0.9656
 a_u = -0.03
 a_u = 0
 s_u = 0.01
@@ -371,7 +371,7 @@ s_x = 0.01
 s_s = 0.01
 x0 = 0
 n_years = 10
-b0 = 1.21
+b0 = 0.9656
 
 for c_val, label in zip(
     [0.33, 0.67],
@@ -607,7 +607,7 @@ s_x = 0.002
 s_r = 0.005
 s_s = 0.01
 r0 = 0.01  # initial interest rate
-b0 = 1.21  # initial debt level
+b0 = 0.9656  # initial debt level
  
 # for different levels of c, run the simulation 
 d_dict = {
