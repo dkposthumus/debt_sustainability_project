@@ -630,6 +630,7 @@ ylim_dict = {
 }
 
 # First pass to collect limits
+results_master = pd.DataFrame()
 for c_val in d_dict.values():
     for beta_r in beta_r_dict.values():
         df_sim = simulate_scenario(
@@ -665,6 +666,7 @@ for c_val in d_dict.values():
         )
         for var in ylim_dict:
             ylim_dict[var].extend(df_sim[var].values)
+        df_sim['c'] = c_val
 
 # Final global limits
 ylim_bounds = {k: (np.percentile(v, 0.5), np.percentile(v, 99.5)) for k, v in ylim_dict.items()}
@@ -933,3 +935,10 @@ plt.grid(True)
 plt.tight_layout()
 plt.savefig(graphics_path / 'debt_change_10y_history_vs_sims.pdf', dpi=300)
 plt.show()
+
+################################################################################
+## export and save sim_results as .csv
+all_sim_results = pd.DataFrame()
+for label, df in c_basic_dict.items():
+    all_sim_results = pd.concat([all_sim_results, df], ignore_index=True)
+all_sim_results.to_csv(output / 'sdsa_enrichment_1_sim_results.csv', index=False)
