@@ -6,6 +6,7 @@ from fredapi import Fred
 import os
 from pathlib import Path
 import statsmodels.api as sm
+from statsmodels.iolib.summary2 import summary_col
 from scipy import stats                #  for the critical t-value
 
 home = Path.home()
@@ -401,3 +402,153 @@ axes[0].legend(loc='upper left', fontsize=9)
 fig.tight_layout(rect=[0, 0, 1, 0.97])
 plt.savefig(output / "illustrative_debt_dynamics_2.png")
 plt.show()
+
+################################################################################
+## estimate interest rate equation
+################################################################################
+
+# first, bring in 10-year treasury term premium
+term_prem = pd.read_csv(raw_data / 'acm_term_premium.csv')
+term_prem.columns = term_prem.columns.str.lower()
+term_prem = term_prem[['date', 'acmtp10']]
+term_prem['date'] = pd.to_datetime(term_prem['date'])
+# convert to quarterly average 
+term_prem['date'] = term_prem['date'].dt.to_period('Q').dt.to_timestamp()
+term_prem = term_prem.groupby('date').mean().reset_index()
+# print maximum and minimum dates 
+print(f"Term premium data from {term_prem['date'].min()} to {term_prem['date'].max()}")
+
+rgdp = get_fred_series('GDPC1', 'real_gdp')
+print(f"Real GDP data from {rgdp['date'].min()} to {rgdp['date'].max()}")
+potential_gdp = get_fred_series('GDPPOT', 'potential_gdp')
+print(f"Potential GDP data from {potential_gdp['date'].min()} to {potential_gdp['date'].max()}")
+debt = get_fred_series('FYGFGDQ188S', 'debt_gdp')
+print(f"Debt-to-GDP data from {debt['date'].min()} to {debt['date'].max()}")
+# nominal GDP for primary surplus calculation
+ngdp = get_fred_series('GDP', 'nominal_gdp')
+ngdp['nominal_gdp'] = ngdp['nominal_gdp'] * 1000
+print(f"Nominal GDP data from {ngdp['date'].min()} to {ngdp['date'].max()}")
+
+# bring in primary surplus data (bea)
+primary = pd.read_csv(raw_data / 'primary_surplus_bea.csv')
+# create datetime variable; right now, quarter looks like: '1947q1'
+quarter_map = {
+    'q1': '-01-01',
+    'q2': '-04-01',
+    'q3': '-07-01',
+    'q4': '-10-01'
+}
+primary['date'] = primary['quarter'].str.lower().replace(quarter_map, regex=True)
+primary['date'] = pd.to_datetime(primary['date'])
+primary = primary[['date', 'primary_surplus']]
+# drop missing primary_surplus 
+primary['primary_surplus'] = primary['primary_surplus'].astype(str).str.replace(',', '')
+primary['primary_surplus'] = pd.to_numeric(primary['primary_surplus'], errors='coerce')
+# drop missing 
+primary = primary.dropna(subset=['primary_surplus'])
+print(f"Primary surplus data from {primary['date'].min()} to {primary['date'].max()}")
+
+df = pd.merge(term_prem, rgdp, on='date', how='left')
+df = pd.merge(df, ngdp, on='date', how='left')
+df = pd.merge(df, potential_gdp, on='date', how='left')
+df = pd.merge(df, debt, on='date', how='left')
+df = pd.merge(df, primary, on='date', how='left')
+
+# convert all vars to float 
+for var in ['acmtp10', 'real_gdp', 'nominal_gdp', 'potential_gdp', 'debt_gdp', 'primary_surplus']:
+    # first, strip all ','
+    df[var] = df[var].astype(str).str.replace(',', '')
+    df[var] = df[var].astype(float)
+
+df['output_gap'] = ((df['real_gdp'] - df['potential_gdp']) / df['potential_gdp']) * 100.0
+df['primary_def_gdp'] = (df['primary_surplus'] / df['nominal_gdp']) * 100.0
+
+df.rename(
+    columns = {
+        'acmtp10': 'ACMTP10_Q',
+        'primary_def_gdp': 'primary_bal_gdp'
+    }, inplace=True
+)
+
+required = ['ACMTP10_Q', 'debt_gdp', 'primary_bal_gdp', 'output_gap']
+missing = [c for c in required if c not in df.columns]
+if missing:
+    raise ValueError(f"Merged DF missing columns: {missing}")
+# drop rows with missing values in required columns
+df = df.dropna(subset=required)
+
+d = df.copy()
+d['b_lag']       = d['debt_gdp'].shift(1)
+d['y_lag']       = d['ACMTP10_Q'].shift(1)
+d['primary_lag'] = d['primary_bal_gdp'].shift(1)
+
+# Keep date and set it as index
+base = d[['date','ACMTP10_Q','b_lag','output_gap','primary_lag','y_lag']].dropna().copy()
+base['date'] = pd.to_datetime(base['date'])
+# optional: align to quarter **end** so your cut dates like 2007-12-31 behave exactly as expected
+base['date'] = base['date'].dt.to_period('Q').dt.to_timestamp(how='end')
+base = base.set_index('date').sort_index()
+
+# Subsamples
+POST_GFC_START = pd.Timestamp('2009-01-01')   # 2009Q1+
+PRE_GFC_END    = pd.Timestamp('2007-12-31')   # through 2007Q4
+
+base_fd = base.copy()
+
+# First difference the main variables
+base_fd['d_acm_tp'] = base_fd['ACMTP10_Q'].diff()
+base_fd['d_debt'] = base_fd['b_lag'].diff()
+base_fd['d_output_gap'] = base_fd['output_gap'].diff()
+base_fd['d_primary'] = base_fd['primary_lag'].diff()
+
+# Keep lagged level of term premium for AR component
+base_fd['y_lag'] = base_fd['y_lag']  # This stays in levels
+
+# Drop first observation (lost to differencing)
+base_fd = base_fd.dropna()
+
+def fit_hac_fd(df, hac_lags=4):
+    """First differences specification"""
+    y = df['d_acm_tp']  # Change in term premium
+    X = sm.add_constant(df[['d_debt', 'd_output_gap', 'd_primary', 'y_lag']])
+    return sm.OLS(y, X).fit(cov_type='HAC', cov_kwds={'maxlags': hac_lags})
+
+# Run first differences regressions
+full_fd = base_fd
+post_fd = base_fd.loc[base_fd.index >= POST_GFC_START]
+pre_fd = base_fd.loc[base_fd.index <= PRE_GFC_END]
+
+res_full_fd = fit_hac_fd(full_fd)
+res_post_fd = fit_hac_fd(post_fd)
+res_pre_fd = fit_hac_fd(pre_fd)
+
+# Convert to basis points
+beta_r_full_fd_bps = res_full_fd.params['d_debt'] * 100.0
+beta_r_post_fd_bps = res_post_fd.params['d_debt'] * 100.0
+beta_r_pre_fd_bps = res_pre_fd.params['d_debt'] * 100.0
+
+print("=== RESULTS WITH FIRST DIFFERENCES ===")
+print(f"β_r (bps per 1-pp change in debt): Full={beta_r_full_fd_bps:.2f}, Post-GFC={beta_r_post_fd_bps:.2f}, Pre-GFC={beta_r_pre_fd_bps:.2f}")
+
+# Create table
+info_fd = {
+    'N': lambda m: f"{int(m.nobs)}",
+    'R$^2$': lambda m: f"{m.rsquared:.3f}",
+    'SE': lambda m: m.cov_type
+}
+
+tbl_fd = summary_col(
+    results=[res_full_fd, res_post_fd, res_pre_fd],
+    float_format='%0.3f',
+    stars=True,
+    model_names=['Full sample', 'Post-GFC', 'Pre-GFC'],
+    info_dict=info_fd,
+    regressor_order=['const', 'd_debt', 'd_output_gap', 'd_primary', 'y_lag']
+)
+
+tbl_fd.add_title('ACM 10y Term Premium: First Differences Specification (HAC SEs)')
+latex_str_fd = tbl_fd.as_latex()
+print(latex_str_fd)
+
+with open(f'{output}/acm_tp_regressions_first_diff.tex', 'w') as f:
+    f.write(latex_str_fd)
