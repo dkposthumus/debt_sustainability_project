@@ -190,7 +190,7 @@ s_r = 0.005
 s_s = 0.010
 
 # smoothing / persistence
-rho   = 0.85   # AR coefficient in Δr law (on Δr_{t-1})
+rho   = 0.158   # AR coefficient in Δr law (on Δr_{t-1})
 sigma = 0.80   # pass-through to r_av
 
 # fiscal reaction regimes (only enrichment runs)
@@ -201,7 +201,7 @@ d_dict = {
 }
 
 # β_r in pp per 1-pp debt (3 bps baseline)
-beta_r_dict = {'3 bps': 0.01}
+beta_r_dict = {'3 bps': 0.0171}
 
 # -------------------------------------------------
 # Simulate, summarize, and plot (Enrichment 1 only)

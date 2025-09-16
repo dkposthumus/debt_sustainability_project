@@ -406,7 +406,6 @@ plt.show()
 ################################################################################
 ## estimate interest rate equation
 ################################################################################
-
 # first, bring in 10-year treasury term premium
 term_prem = pd.read_csv(raw_data / 'acm_term_premium.csv')
 term_prem.columns = term_prem.columns.str.lower()
@@ -495,60 +494,63 @@ PRE_GFC_END    = pd.Timestamp('2007-12-31')   # through 2007Q4
 
 base_fd = base.copy()
 
-# First difference the main variables
-base_fd['d_acm_tp'] = base_fd['ACMTP10_Q'].diff()
-base_fd['d_debt'] = base_fd['b_lag'].diff()
-base_fd['d_output_gap'] = base_fd['output_gap'].diff()
-base_fd['d_primary'] = base_fd['primary_lag'].diff()
+# Differences
+base_fd['d_r']        = base_fd['ACMTP10_Q'].diff()      # Δy_t
+base_fd['d_b_lag']    = base_fd['b_lag'].diff()          # Δb_{t-1}
+base_fd['d_b_lag2']   = base_fd['d_b_lag'].shift(1)      # Δb_{t-2}
+base_fd['d_gap']      = base_fd['output_gap'].diff()
+base_fd['d_primary']  = base_fd['primary_lag'].diff()
+base_fd['d_r_lag']    = base_fd['d_r'].shift(1)          # Δy_{t-1}
 
-# Keep lagged level of term premium for AR component
-base_fd['y_lag'] = base_fd['y_lag']  # This stays in levels
-
-# Drop first observation (lost to differencing)
 base_fd = base_fd.dropna()
 
 def fit_hac_fd(df, hac_lags=4):
-    """First differences specification"""
-    y = df['d_acm_tp']  # Change in term premium
-    X = sm.add_constant(df[['d_debt', 'd_output_gap', 'd_primary', 'y_lag']])
+    import statsmodels.api as sm
+    y = df['d_r']
+    X = sm.add_constant(df[['d_b_lag', 'd_b_lag2', 'd_gap', 'd_primary', 'd_r_lag']])
     return sm.OLS(y, X).fit(cov_type='HAC', cov_kwds={'maxlags': hac_lags})
 
-# Run first differences regressions
+# Samples
+POST_GFC_START = pd.Timestamp('2009-01-01')
+PRE_GFC_END    = pd.Timestamp('2007-12-31')
+
 full_fd = base_fd
 post_fd = base_fd.loc[base_fd.index >= POST_GFC_START]
-pre_fd = base_fd.loc[base_fd.index <= PRE_GFC_END]
+pre_fd  = base_fd.loc[base_fd.index <= PRE_GFC_END]
 
 res_full_fd = fit_hac_fd(full_fd)
 res_post_fd = fit_hac_fd(post_fd)
-res_pre_fd = fit_hac_fd(pre_fd)
+res_pre_fd  = fit_hac_fd(pre_fd)
 
-# Convert to basis points
-beta_r_full_fd_bps = res_full_fd.params['d_debt'] * 100.0
-beta_r_post_fd_bps = res_post_fd.params['d_debt'] * 100.0
-beta_r_pre_fd_bps = res_pre_fd.params['d_debt'] * 100.0
+# Read parameters
+def report(m, label):
+    beta_r_pp   = m.params['d_b_lag']               # pp per 1-pp Δb
+    beta_r_bps  = 100 * beta_r_pp                   # bps per 1-pp Δb
+    rho         = m.params['d_r_lag']               # ρ (persistence in Δy)
+    rho_check   = -m.params['d_b_lag2']/beta_r_pp if beta_r_pp != 0 else np.nan
+    print(f"{label:10s} | β_r = {beta_r_bps:6.2f} bps/pp,  ρ = {rho: .3f},  ρ(implied) = {rho_check: .3f}")
 
-print("=== RESULTS WITH FIRST DIFFERENCES ===")
-print(f"β_r (bps per 1-pp change in debt): Full={beta_r_full_fd_bps:.2f}, Post-GFC={beta_r_post_fd_bps:.2f}, Pre-GFC={beta_r_pre_fd_bps:.2f}")
+print("=== RESULTS WITH FIRST DIFFERENCES (structurally aligned) ===")
+report(res_full_fd, "Full")
+report(res_post_fd, "Post-GFC")
+report(res_pre_fd,  "Pre-GFC")
 
-# Create table
+# LaTeX table
+from statsmodels.iolib.summary2 import summary_col
 info_fd = {
-    'N': lambda m: f"{int(m.nobs)}",
-    'R$^2$': lambda m: f"{m.rsquared:.3f}",
-    'SE': lambda m: m.cov_type
+    'N':    lambda m: f"{int(m.nobs)}",
+    'R$^2$':lambda m: f"{m.rsquared:.3f}",
+    'SE':   lambda m: m.cov_type
 }
-
 tbl_fd = summary_col(
     results=[res_full_fd, res_post_fd, res_pre_fd],
-    float_format='%0.3f',
-    stars=True,
-    model_names=['Full sample', 'Post-GFC', 'Pre-GFC'],
+    float_format='%0.3f', stars=True,
+    model_names=['Full sample','Post-GFC','Pre-GFC'],
     info_dict=info_fd,
-    regressor_order=['const', 'd_debt', 'd_output_gap', 'd_primary', 'y_lag']
+    regressor_order=['const','d_b_lag','d_b_lag2','d_gap','d_primary','d_r_lag']
 )
-
-tbl_fd.add_title('ACM 10y Term Premium: First Differences Specification (HAC SEs)')
+tbl_fd.add_title('ACM 10y Term Premium: First Differences (HAC SEs)')
 latex_str_fd = tbl_fd.as_latex()
 print(latex_str_fd)
-
-with open(f'{output}/acm_tp_regressions_first_diff.tex', 'w') as f:
+with open(f'{output}/acm_tp_regressions_first_diff.tex','w') as f:
     f.write(latex_str_fd)
