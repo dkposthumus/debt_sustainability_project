@@ -191,3 +191,44 @@ plt.legend(loc='best')
 plt.tight_layout()
 plt.savefig(output / 'debt_curvature_savgol_logQ4.pdf', dpi=300)
 plt.show()
+
+################################################################################
+# compare distributions between historical data and simulation results
+################################################################################
+output = (work_dir / 'output' / 'sdsa' / 'graphics')
+
+sim_results = pd.read_csv(f'{output}/sdsa_enrichment1_sim_results.csv')
+# now we want to create separate vectors of the 10-year change (in percentage points)
+# in debt/GDP for both the historical data and the simulation results
+debt_q4['debt_10yr_change'] = debt_q4['debt'].diff(10) * 100  # convert to percentage points
+# drop NA values
+historical_changes = debt_q4['debt_10yr_change'].dropna()
+# # plot the distributions using seaborn
+plt.figure(figsize=(12, 8))
+for c_vals, color in zip([0, 0.15, 0.30],
+                         ['blue', 'green', 'red']):
+    subset = sim_results[sim_results['c'] == c_vals]
+    yr10_changes = []
+    for i in subset['sim'].unique():
+        sim_df = subset[subset['sim'] == i].sort_values('year').reset_index(drop=True)
+        change = (sim_df['b'].iloc[-1] - sim_df['b'].iloc[0]) * 100  # percentage points
+        yr10_changes.append(change)
+    sns.kdeplot(yr10_changes, label=f'Simulated 10-year Changes (c={c_vals})', 
+                fill=False, color=color)
+    # add median line
+    median_change = np.median(yr10_changes)
+    plt.axvline(median_change, linestyle='--', 
+                label=f'Median Simulated (c={c_vals}): {median_change:.2f} pp', color=color)
+sns.kdeplot(historical_changes, label='Observed 10-year Changes', color='orange', 
+            fill=False)
+# add median 
+median_historical = np.median(historical_changes)
+plt.axvline(median_historical, color='orange', linestyle='--', 
+            label=f'Median Observed: {median_historical:.2f} pp')
+plt.title('Distribution of 10-year Changes in Debt/GDP: Historical vs Simulated')
+plt.xlabel('10-year Change in Debt/GDP (percentage points)')
+plt.ylabel('Density')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
