@@ -64,6 +64,13 @@ cbo_forecasts = cbo_forecasts[(cbo_forecasts['year'] >= 2025) &
                               (cbo_forecasts['year'] <= 2035)]
 a_ug = (cbo_forecasts['g (cbo baseline)'].values) / 100.0
 
+# read in higher TFP growth scenario from CBO updated values
+cbo_ai = pd.read_excel(clean_data / 'cbo_ai_projections.xlsx', sheet_name='higher_tfp_data')
+cbo_ai = cbo_ai[(cbo_ai['year'] >= 2025) &
+                              (cbo_ai['year'] <= 2035)]
+# now estimate percent change in real GDP
+a_ug_ai = (cbo_ai['g (cbo ai)'].values) / 100.0
+
 # Senate TBL baseline for s -> a_s (levels, decimal)
 forecasts = pd.read_csv(clean_data / 'master_projections_cleaned.csv')
 forecasts['year'] = pd.to_datetime(forecasts['date']).dt.year
@@ -206,6 +213,15 @@ beta_r_dict = {'3 bps': 0.0171}
 # -------------------------------------------------
 # Simulate, summarize, and plot (Enrichment 1 only)
 # -------------------------------------------------
+    # helper: compute median & IQR by year
+def _band_by_year(df, var):
+        g = (df.groupby('year')[var]
+             .agg(median='median',
+                  p25=lambda x: np.percentile(x,25),
+                  p75=lambda x: np.percentile(x,75))
+             .reset_index())
+        return g
+
 def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict, r_star: float, b0: float):
     graphics_path.mkdir(parents=True, exist_ok=True)
 
@@ -229,15 +245,6 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
 
     # global axis ranges (robust to tails)
     ylim_bounds = {k: (np.percentile(v, 0.5), np.percentile(v, 99.5)) for k, v in ylim_store.items()}
-
-    # helper: compute median & IQR by year
-    def _band_by_year(df, var):
-        g = (df.groupby('year')[var]
-             .agg(median='median',
-                  p25=lambda x: np.percentile(x,25),
-                  p75=lambda x: np.percentile(x,75))
-             .reset_index())
-        return g
 
     # overlay plots for each metric
     def _plot_overlay(var, title, ylab, yline=None, ylim_key=None, fname=None):
@@ -333,3 +340,84 @@ enriched_frames = summarize_and_plot(sim_results_by_regime, output, d_dict, r_st
 # (optional) export
 all_sim_results = pd.concat(enriched_frames.values(), ignore_index=True)
 all_sim_results.to_csv(output / 'sdsa_enrichment1_sim_results.csv', index=False)
+
+# -------------------------------------------------
+# Addendum - AI Boom
+# -------------------------------------------------
+
+'''
+I now do the following:
+- run simulations using cbo_ai['real_gdp'] as a_ug vs. cbo_forecasts['g (cbo baseline)'] 
+    as a_ug and SEPARATELY plot b_overlay for c = 0 and c = 0.15
+'''
+
+# define a_ug dict 
+a_ug_dict = {
+    'CBO Baseline': a_ug,
+    'CBO AI Boom': a_ug_ai
+}
+
+# for context, plot a_ug paths
+plt.figure(figsize=(11,7))
+for label, a_ug_vec in a_ug_dict.items():
+    plt.plot(range(2025, 2025 + n_years), a_ug_vec, label=label)
+plt.title('a_ug Paths: CBO Baseline vs. AI Boom')
+plt.xlabel('Year'); plt.ylabel('a_ug')
+plt.grid(True)
+plt.legend(loc='best', fontsize='x-large')
+plt.tight_layout()
+plt.show()
+
+# define c scenarios to plot
+c_scenarios = {
+    'Irresponsible (c=0.00)': 0.00,
+    'Responsible(c=0.15)': 0.15
+}
+
+# run sims and plot overlays 
+sim_results_by_augs = {}
+for a_ug_label, a_ug_vec in a_ug_dict.items():
+    for c_label, c_val in c_scenarios.items():
+        df_sim = simulate_scenario(
+            c_val=c_val, a_s_vec=a_s, a_ug=a_ug_vec,
+            r_star=r_star, beta_r=beta_r_dict['3 bps'], rho=rho, sigma=sigma,
+            s_g=s_g, s_x=s_x, s_r=s_r, s_s=s_s,
+            x0=0.0, r0=r0, b0=b0,
+            n_years=n_years, n_simulations=n_sims,
+            label=f"{a_ug_label} - {c_label}"
+        )
+        sim_results_by_augs[f"{a_ug_label} - {c_label}"] = df_sim
+
+# now plot b overlays for each c scenario
+for c_label, c_val in c_scenarios.items():
+    # filter to just this c scenario
+    filtered_sims = {k: v for k, v in sim_results_by_augs.items() if c_label in k}
+    # plot only debt path overlay by hand, no function
+    plt.figure(figsize=(11,7))
+    for label, df_sim in filtered_sims.items():
+        g = _band_by_year(df_sim, 'b')
+        plt.plot(g['year'], g['median'], label=label)
+        plt.fill_between(g['year'], g['p25'], g['p75'], alpha=0.20)
+    plt.axhline(y=b0, color='black', linestyle='--', linewidth=0.9)
+    plt.ylim(b0 - 0.1, 1.7)
+    plt.title(f'Debt (b): Median & IQR — AI Boom vs. Baseline ({c_label})')
+    plt.xlabel('Year'); plt.ylabel('b')
+    plt.grid(True)
+    plt.legend(loc='best', fontsize='x-large')
+    plt.tight_layout()
+    plt.savefig(output / f'sdsa_enrichment1_b_overlay_ai_boom_{c_val:.2f}.pdf', dpi=300)
+    plt.show()
+
+    # also overlay growth to make sure that our model is not hallucinating
+    plt.figure(figsize=(11,7))
+    for label, df_sim in filtered_sims.items():
+        g = _band_by_year(df_sim, 'g')
+        plt.plot(g['year'], g['median'], label=label)
+        plt.fill_between(g['year'], g['p25'], g['p75'], alpha=0.20)
+    plt.title(f'Growth (g): Median & IQR — AI Boom vs. Baseline ({c_label})')
+    plt.xlabel('Year'); plt.ylabel('g')
+    plt.ylim(0.0, 0.06)
+    plt.grid(True)
+    plt.legend(loc='best', fontsize='x-large')
+    plt.tight_layout()
+    plt.show()
