@@ -361,11 +361,13 @@ a_ug_dict = {
 plt.figure(figsize=(11,7))
 for label, a_ug_vec in a_ug_dict.items():
     plt.plot(range(2025, 2025 + n_years), a_ug_vec, label=label)
-plt.title('a_ug Paths: CBO Baseline vs. AI Boom')
+plt.axhline(y = 0, color='black', linestyle='--', linewidth=0.9)
+plt.title('Mean Growth Rate Paths: CBO Baseline vs. AI Boom')
 plt.xlabel('Year'); plt.ylabel('a_ug')
 plt.grid(True)
 plt.legend(loc='best', fontsize='x-large')
 plt.tight_layout()
+plt.savefig(output / 'sdsa_enrichment1_a_ug_paths_ai_boom.pdf', dpi=300)
 plt.show()
 
 # define c scenarios to plot
