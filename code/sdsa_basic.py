@@ -74,6 +74,11 @@ a_ug_ai = (cbo_ai['g (cbo ai)'].values) / 100.0
 # Senate TBL baseline for s -> a_s (levels, decimal)
 forecasts = pd.read_csv(clean_data / 'master_projections_cleaned.csv')
 forecasts['year'] = pd.to_datetime(forecasts['date']).dt.year
+a_s_alternative = (forecasts.groupby('year')['s (cbo baseline)']
+             .mean().reset_index())
+a_s_alternative = a_s_alternative[(a_s_alternative['year'] >= 2025) &
+                      (a_s_alternative['year'] <= 2035)]
+a_s_alternative = (a_s_alternative['s (cbo baseline)'].values) / 100.0
 forecasts = (forecasts.groupby('year')['s (tbl senate, permanent)']
              .mean().reset_index())
 forecasts = forecasts[(forecasts['year'] >= 2025) &
@@ -275,6 +280,51 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
                   'g',
                   ylim_key='g',
                   fname='sdsa_enrichment1_g_overlay.pdf')
+    
+    plt.figure(figsize=(11,7))
+    for label, c_val in d_dict.items():
+        if c_val != 0.15:
+            continue
+        df_sim = enriched[label]
+        # Flags to ensure each category is labeled only once
+        high_labeled = False
+        low_labeled = False
+        other_labeled = False
+        for sim_id, df_sim_i in df_sim.groupby('sim'):
+            mean_g = df_sim_i['g'].mean()
+            if mean_g > 0.028:
+                plt.plot(
+                    range(2025, 2025 + n_years),
+                    df_sim_i['g'],
+                    color='green', alpha=0.2,
+                    label='simulations w/ > 2.8% avg growth' if not high_labeled else ""
+                )
+                high_labeled = True
+            elif mean_g < 0.0075:
+                plt.plot(
+                    range(2025, 2025 + n_years),
+                    df_sim_i['g'],
+                    color='red', alpha=0.2,
+                    label='simulations w/ < 0.75% avg growth' if not low_labeled else ""
+                )
+                low_labeled = True
+            else:
+                plt.plot(
+                    range(2025, 2025 + n_years),
+                    df_sim_i['g'],
+                    color='gray', alpha=0.01,
+                    label='all other simulations' if not other_labeled else ""
+                )
+                other_labeled = True
+        plt.axhline(y=0, color='black', linestyle='--', linewidth=0.9)
+    plt.title('Growth (g) Rates: Median — Responsible (c=0.15) Only')
+    plt.xlabel('Year')
+    plt.ylabel('real growth rate (g)')
+    plt.grid(True)
+    plt.legend(loc='best', fontsize='x-large')
+    plt.tight_layout()
+    plt.savefig(graphics_path / 'sdsa_enrichment1_g_rates_responsible_only.pdf', dpi=300)
+    plt.show()
 
     _plot_overlay('r',   # uses r_av internally
                   'Interest Rate (r_av): Median & IQR — Regimes',
@@ -423,3 +473,54 @@ for c_label, c_val in c_scenarios.items():
     plt.legend(loc='best', fontsize='x-large')
     plt.tight_layout()
     plt.show()
+
+# -------------------------------------------------
+# Addendum - Using pre-OBBBA CBO s projections
+# -------------------------------------------------
+
+# fix c = 0.075
+c = 0.075 
+# run sims and plot overlay -- ONLY for debt, comparing a_s to a_s_alternative 
+sim_results_s_paths = {}
+for a_s_label, a_s_vec in zip(['Post-OBBBA TBL Projected Deficit', 'Pre-OBBBA CBO Baseline Projected Deficit'], 
+                              [a_s, a_s_alternative]):
+    df_sim = simulate_scenario(
+        c_val=c, a_s_vec=a_s_vec, a_ug=a_ug,
+        r_star=r_star, beta_r=beta_r_dict['3 bps'], rho=rho, sigma=sigma,
+        s_g=s_g, s_x=s_x, s_r=s_r, s_s=s_s,
+        x0=0.0, r0=r0, b0=b0,
+        n_years=n_years, n_simulations=n_sims,
+        label=f"{a_s_label} (c={c:.3f})"
+    )
+    sim_results_s_paths[a_s_label] = df_sim
+# plot only debt path overlay by hand, no function
+color_dict = {
+    'Post-OBBBA TBL Projected Deficit': 'blue',
+    'Pre-OBBBA CBO Baseline Projected Deficit': 'orange'
+}
+plt.figure(figsize=(11,7))
+for label, df_sim in sim_results_s_paths.items():
+    g = _band_by_year(df_sim, 'b').reset_index()
+    # Convert "year" to calendar year for both median and simulations
+    g['calendar_year'] = 2024 + g['year']  # so that year=1 → 2025, etc.
+    # Plot median
+    plt.plot(g['calendar_year'], g['median'], label=label, linewidth=2.5, color=color_dict[label])
+    # Optional fill between p25/p75
+    plt.fill_between(g['calendar_year'], g['p25'], g['p75'], alpha=0.20, color=color_dict[label])
+    # Plot all simulation paths in background
+    '''for sim_id, df_sim_i in df_sim.groupby('sim'):
+        plt.plot(
+            2024 + df_sim_i['year'],
+            df_sim_i['b'],
+            color=color_dict[label], alpha=0.01
+        )'''
+plt.axhline(y=b0, color='black', linestyle='--', linewidth=0.9)
+plt.ylim(b0 - 0.1, 1.7)
+plt.title(f'Debt (b): Median & IQR — Senate TBL vs. CBO Baseline Savings')
+plt.xlabel('Year')
+plt.ylabel('Debt-to-GDP ratio (b)')
+plt.grid(True)
+plt.legend(loc='best', fontsize='x-large')
+plt.tight_layout()
+plt.savefig(output / 'sdsa_enrichment1_b_overlay_s_paths.pdf', dpi=300)
+plt.show()

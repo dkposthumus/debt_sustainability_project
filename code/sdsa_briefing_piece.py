@@ -8,6 +8,7 @@ from adjustText import adjust_text
 import numpy as np
 from pathlib import Path
 from scipy.signal import savgol_filter
+import scipy.stats as st
 
 # let's create a set of locals referring to our directory and working directory 
 home = Path.home()
@@ -233,3 +234,110 @@ plt.grid(True)
 plt.tight_layout()
 plt.savefig(f'{output}/debt_10yr_change_distribution.pdf', dpi=300)
 plt.show()
+
+################################################################################
+# quantile tables
+################################################################################
+# --- Gather distributions ---
+distributions = {}
+for c_vals in [0, 0.15, 0.30]:
+    subset = sim_results[sim_results['c'] == c_vals]
+    yr10_changes = []
+    for i in subset['sim'].unique():
+        sim_df = subset[subset['sim'] == i].sort_values('year').reset_index(drop=True)
+        change = (sim_df['b'].iloc[-1] - sim_df['b'].iloc[0]) * 100  # percentage points
+        yr10_changes.append(change)
+    distributions[f'$c={c_vals:.2f}$'] = np.array(yr10_changes)
+
+distributions['Historical'] = np.array(historical_changes)
+
+# --- Helper: empirical CDF percentile ranks ---
+def empirical_percentile(x, values):
+    """Compute empirical percentile rank of each value in `values` within sample x."""
+    return np.array([st.percentileofscore(x, v, kind='weak') for v in values])
+
+# --------------------------------------------------------------------------
+# 1️⃣ Table: percentile ranks of simulated distributions within historical
+# --------------------------------------------------------------------------
+summary_rows = []
+hist = distributions['Historical']
+
+for key, vals in distributions.items():
+    if key == 'Historical':
+        continue
+    p10, p50, p90 = np.percentile(vals, [10, 50, 90])
+    hist_perc = empirical_percentile(hist, [p10, p50, p90])
+    summary_rows.append({
+        'Simulation': key,
+        '10th Percentile (pp)': p10,
+        'Rank in Hist. (\\%)_1': hist_perc[0],
+        'Median (pp)': p50,
+        'Rank in Hist. (\\%)_2': hist_perc[1],
+        '90th Percentile (pp)': p90,
+        'Rank in Hist. (\\%)_3': hist_perc[2],
+    })
+
+table1 = pd.DataFrame(summary_rows)
+
+# Drop the duplicate suffixes and standardize names
+table1.columns = [
+    'Simulation',
+    '10th Percentile (pp)',
+    'Rank in Hist. (\\%)',
+    'Median (pp)',
+    'Rank in Hist. (\\%)',
+    '90th Percentile (pp)',
+    'Rank in Hist. (\\%)'
+]
+
+# --- Force numeric values to one-decimal-place strings safely ---
+def format_one_decimal(x):
+    try:
+        return f"{float(x):.1f}"
+    except Exception:
+        return x
+
+table1 = table1.applymap(format_one_decimal)
+
+# --- Export LaTeX ---
+table1_latex = table1.to_latex(
+    index=False,
+    escape=False,
+    column_format='lcccccc',
+    caption='Percentile ranks of simulated 10-year debt/GDP changes within the historical distribution.',
+    label='tab:sim_vs_hist_percentile_ranks',
+    bold_rows=False,
+    longtable=False
+)
+
+with open(output / 'table_sim_vs_hist_percentile_ranks.tex', 'w') as f:
+    f.write(table1_latex)
+
+# --------------------------------------------------------------------------
+# 2️⃣ Table: empirical percentiles of each distribution
+# --------------------------------------------------------------------------
+quantiles = [10, 25, 50, 75, 90]
+table2 = pd.DataFrame({
+    dist_name: np.percentile(values, quantiles)
+    for dist_name, values in distributions.items()
+}, index=[f'{q}th' for q in quantiles])
+
+table2 = table2.T.reset_index().rename(columns={'index': 'Distribution'})
+table2 = table2.applymap(format_one_decimal)
+
+table2_latex = table2.to_latex(
+    index=False,
+    escape=False,
+    column_format='lccccc',
+    caption='Empirical percentiles (10th–90th) of 10-year debt/GDP changes: historical and simulated distributions.',
+    label='tab:debt_change_percentiles',
+    bold_rows=False,
+    longtable=False
+)
+
+with open(output / 'table_debt_change_percentiles.tex', 'w') as f:
+    f.write(table2_latex)
+
+print("\n✅ LaTeX tables saved to:")
+print(f" - {output / 'table_sim_vs_hist_percentile_ranks.tex'}")
+print(f" - {output / 'table_debt_change_percentiles.tex'}")
