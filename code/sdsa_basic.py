@@ -477,7 +477,6 @@ for c_label, c_val in c_scenarios.items():
 # -------------------------------------------------
 # Addendum - Using pre-OBBBA CBO s projections
 # -------------------------------------------------
-
 # fix c = 0.075
 c = 0.075 
 # run sims and plot overlay -- ONLY for debt, comparing a_s to a_s_alternative 
