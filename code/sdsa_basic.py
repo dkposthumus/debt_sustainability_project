@@ -401,11 +401,51 @@ I now do the following:
     as a_ug and SEPARATELY plot b_overlay for c = 0 and c = 0.15
 '''
 
-# define a_ug dict 
+# define growth rates
 a_ug_dict = {
-    'CBO Baseline': a_ug,
-    'CBO AI Boom': a_ug_ai
+    'CBO Baseline': a_ug,  # e.g. list or np.array of growth rates
+    'CBO AI Boom': [
+        2.1 / 100, 1.9 / 100, 2.0 / 100, 2.1 / 100, 2.3 / 100,
+        2.4 / 100, 2.4 / 100, 2.5 / 100, 2.5 / 100, 2.5 / 100, 2.4 / 100
+    ]
 }
+
+initial_gdp = 23770.976
+growth_rates = np.array(a_ug_dict['CBO Baseline'])
+
+# initialize GDP vector
+real_gdp = np.zeros(len(growth_rates))
+for i in range(len(growth_rates)):
+    if i == 0:
+        real_gdp[i] = initial_gdp * (1 + growth_rates[i])
+    else:
+        real_gdp[i] = real_gdp[i-1] * (1 + growth_rates[i])
+
+# back out primary deficits
+baseline_net_interest = [
+    952.261,	1010.276,	1075.238,	1164.485,	1247.23,	1327.549,	1416.982,	
+    1513.903,	1604.542,	1693.559,	1782.585
+] ## january 2025 CBO baseline net interest (billions)
+projected_change_net_interest = [
+    0,	1,	3,	7,	14,	25,	38,	53,	70,	88,	107,
+] ## projected change in net interest due to AI boom (billions)
+projected_net_interest = np.array(baseline_net_interest) + np.array(projected_change_net_interest)
+projected_total_deficit = [
+    -1865,	-1709,	-1674,	-1883,	-1889,	-2062,	-2123,	
+    -2226,	-2456,	-2374,	-2262
+] ## AI Boom projected total deficits (billions)
+total_deficit_changes = [
+    0,	4,	13,	28,	50,	78,	110,	
+    144,	182,	223,	270,
+]
+
+primary_deficit_changes = np.array(total_deficit_changes) - np.array(projected_change_net_interest)
+# now apply this delta to the post-OBBBA baseline (a_s)
+primary_deficit_changes_pct_gdp = (primary_deficit_changes / np.array(real_gdp))
+a_s_ai = a_s + primary_deficit_changes_pct_gdp
+
+projected_primary_deficit = np.array(projected_total_deficit) + projected_net_interest
+a_s_check = projected_primary_deficit / np.array(real_gdp)
 
 # for context, plot a_ug paths
 plt.figure(figsize=(11,7))
@@ -428,17 +468,23 @@ c_scenarios = {
 
 # run sims and plot overlays 
 sim_results_by_augs = {}
-for a_ug_label, a_ug_vec in a_ug_dict.items():
+a_ug_dict = {
+    'CBO Baseline': {'a_ug': a_ug, 'a_s': a_s},
+    'CBO AI Boom': {'a_ug': a_ug_ai, 'a_s': a_s_ai}
+}
+for label, params in a_ug_dict.items():
+    a_ug_vec = params['a_ug']
+    a_s_vec = params['a_s']
     for c_label, c_val in c_scenarios.items():
         df_sim = simulate_scenario(
-            c_val=c_val, a_s_vec=a_s, a_ug=a_ug_vec,
+            c_val=c_val, a_s_vec=a_s_vec, a_ug=a_ug_vec,
             r_star=r_star, beta_r=beta_r_dict['3 bps'], rho=rho, sigma=sigma,
             s_g=s_g, s_x=s_x, s_r=s_r, s_s=s_s,
             x0=0.0, r0=r0, b0=b0,
             n_years=n_years, n_simulations=n_sims,
-            label=f"{a_ug_label} - {c_label}"
+            label=f"{label} - {c_label}"
         )
-        sim_results_by_augs[f"{a_ug_label} - {c_label}"] = df_sim
+        sim_results_by_augs[f"{label} - {c_label}"] = df_sim
 
 # now plot b overlays for each c scenario
 for c_label, c_val in c_scenarios.items():
