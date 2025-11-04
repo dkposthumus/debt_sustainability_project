@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from fredapi import Fred
 import statsmodels.api as sm
+import seaborn as sns
 
 # -------------------------------------------------
 # Paths, plotting style, and helpers (unchanged)
@@ -401,51 +402,30 @@ I now do the following:
     as a_ug and SEPARATELY plot b_overlay for c = 0 and c = 0.15
 '''
 
+a_ug_ai = [
+        2.1 / 100, 1.9 / 100, 2.0 / 100, 2.1 / 100, 2.3 / 100,
+        2.4 / 100, 2.4 / 100, 2.5 / 100, 2.5 / 100, 2.5 / 100, 2.4 / 100
+]
 # define growth rates
 a_ug_dict = {
     'CBO Baseline': a_ug,  # e.g. list or np.array of growth rates
-    'CBO AI Boom': [
-        2.1 / 100, 1.9 / 100, 2.0 / 100, 2.1 / 100, 2.3 / 100,
-        2.4 / 100, 2.4 / 100, 2.5 / 100, 2.5 / 100, 2.5 / 100, 2.4 / 100
-    ]
+    'CBO AI Boom': a_ug_ai
 }
 
-initial_gdp = 23770.976
-growth_rates = np.array(a_ug_dict['CBO Baseline'])
-
-# initialize GDP vector
-real_gdp = np.zeros(len(growth_rates))
-for i in range(len(growth_rates)):
-    if i == 0:
-        real_gdp[i] = initial_gdp * (1 + growth_rates[i])
-    else:
-        real_gdp[i] = real_gdp[i-1] * (1 + growth_rates[i])
-
-# back out primary deficits
-baseline_net_interest = [
-    952.261,	1010.276,	1075.238,	1164.485,	1247.23,	1327.549,	1416.982,	
-    1513.903,	1604.542,	1693.559,	1782.585
-] ## january 2025 CBO baseline net interest (billions)
-projected_change_net_interest = [
-    0,	1,	3,	7,	14,	25,	38,	53,	70,	88,	107,
-] ## projected change in net interest due to AI boom (billions)
-projected_net_interest = np.array(baseline_net_interest) + np.array(projected_change_net_interest)
-projected_total_deficit = [
-    -1865,	-1709,	-1674,	-1883,	-1889,	-2062,	-2123,	
-    -2226,	-2456,	-2374,	-2262
-] ## AI Boom projected total deficits (billions)
-total_deficit_changes = [
-    0,	4,	13,	28,	50,	78,	110,	
-    144,	182,	223,	270,
+ai_real_gdp = [
+    23785.8,    24246.8,	24728.8,	25245.1,	
+    25813.1,	26435.5,	27077.5,	27745.2,	28429.3,	
+    29126.2,	29833.3
 ]
 
-primary_deficit_changes = np.array(total_deficit_changes) - np.array(projected_change_net_interest)
-# now apply this delta to the post-OBBBA baseline (a_s)
-primary_deficit_changes_pct_gdp = (primary_deficit_changes / np.array(real_gdp))
-a_s_ai = a_s + primary_deficit_changes_pct_gdp
+change_in_primary_deficit_billions = [
+    0,          -4.831,     -16.07,	    -34.82, 	
+    -63.501,	-103.005,	-147.772,	-197.116,	
+    -251.725,	-311.17,	-376.583,
+]
+change_in_primary_deficit_pct_gdp = np.array(change_in_primary_deficit_billions) / np.array(ai_real_gdp)
 
-projected_primary_deficit = np.array(projected_total_deficit) + projected_net_interest
-a_s_check = projected_primary_deficit / np.array(real_gdp)
+a_s_ai = a_s - change_in_primary_deficit_pct_gdp
 
 # for context, plot a_ug paths
 plt.figure(figsize=(11,7))
@@ -519,6 +499,96 @@ for c_label, c_val in c_scenarios.items():
     plt.legend(loc='best', fontsize='x-large')
     plt.tight_layout()
     plt.show()
+
+    # also plot r vs. g overlay 
+    plt.figure(figsize=(11,7))
+    for label, df_sim in filtered_sims.items():
+        g = _band_by_year(df_sim, 'r_av')
+        plt.plot(g['year'], g['median'], label=f"{label} - r_av")
+        plt.fill_between(g['year'], g['p25'], g['p75'], alpha=0.10)
+        g_g = _band_by_year(df_sim, 'g')
+        plt.plot(g_g['year'], g_g['median'], label=f"{label} - g", linestyle='--')
+    plt.title(f'Interest Rate (r_av) vs. Growth (g): Median & IQR — AI Boom vs. Baseline ({c_label})')
+    plt.xlabel('Year'); plt.ylabel('r_av and g')
+    plt.ylim(0.0, 0.06)
+    plt.grid(True)
+    plt.legend(loc='best', fontsize='x-large')
+    plt.tight_layout()
+    plt.show()
+
+# ============================================================
+# Distribution of 10-year Debt Changes — AI vs Baseline
+# ============================================================
+
+# ── historical benchmark ─────────────────────────────────────
+# Example: you already have a quarterly debt series `debt_q4`
+# with levels in ratio form (debt/GDP). We compute 10y diffs.
+debt = get_fred_series('FYGFGDQ188S', 'Federal Debt Held by the Public')
+debt.columns = debt.columns.str.lower()
+debt.rename(columns={'federal debt held by the public': 'debt'}, inplace=True)
+debt['debt'] = debt['debt'] / 100.0  # percent → decimal
+# keep one observation per year (Q4). Many FRED quarter stamps are quarter-start dates; Q4==October works.
+debt_q4 = debt[debt['date'].dt.month == 10].sort_values('date').copy()
+debt_q4['debt_10yr_change'] = debt_q4['debt'].diff(10) * 100  # 40 quarters = 10 years
+historical_changes = debt_q4['debt_10yr_change'].dropna()
+# ── helper to compute simulated 10y changes ──────────────────
+def compute_ten_year_changes(df: pd.DataFrame) -> np.ndarray:
+    """Compute 10-year change in debt/GDP (pp) per simulation."""
+    changes = []
+    for sim_id, df_sim in df.groupby("sim"):
+        df_sim = df_sim.sort_values("year")
+        change = (df_sim["b"].iloc[-1] - df_sim["b"].iloc[0]) * 100
+        changes.append(change)
+    return np.array(changes)
+
+# ── collect four distributions ───────────────────────────────
+distros = {}
+target_labels = [
+    "CBO Baseline - Irresponsible (c=0.00)",
+    "CBO Baseline - Responsible(c=0.15)",
+    "CBO AI Boom - Irresponsible (c=0.00)",
+    "CBO AI Boom - Responsible(c=0.15)"
+]
+for label in target_labels:
+    if label not in sim_results_by_augs:
+        print(f"Warning: {label} not found in results")
+        continue
+    distros[label] = compute_ten_year_changes(sim_results_by_augs[label])
+
+# ── plot overlay of distributions ─────────────────────────────
+plt.figure(figsize=(12, 8))
+palette = {
+    "CBO Baseline - Irresponsible (c=0.00)": "#1f77b4",
+    "CBO Baseline - Responsible(c=0.15)": "#2ca02c",
+    "CBO AI Boom - Irresponsible (c=0.00)": "#ff7f0e",
+    "CBO AI Boom - Responsible(c=0.15)": "#d62728",
+}
+
+for label, data in distros.items():
+    sns.kdeplot(data, label=label, fill=False, linewidth=2.0, color=palette[label])
+    median_val = np.median(data)
+    plt.axvline(median_val, color=palette[label], linestyle="--", linewidth=1.2)
+    '''plt.text(median_val + 0.1, plt.ylim()[1]*0.9,
+             f"{median_val:.1f}", color=palette[label], fontsize=10)'''
+
+# ── add historical overlay ───────────────────────────────────
+sns.kdeplot(historical_changes, label="Historical (Observed)", color="black",
+            linestyle=":", linewidth=2.0)
+median_hist = np.median(historical_changes)
+plt.axvline(median_hist, color="black", linestyle=":", linewidth=1.2)
+plt.text(median_hist + 0.1, plt.ylim()[1]*0.8,
+         f"{median_hist:.1f}", color="black", fontsize=10)
+
+# ── aesthetics ───────────────────────────────────────────────
+plt.title("Distribution of 10-Year Changes in Debt/GDP\nAI Boom vs. Baseline — c=0 and c=0.15",
+          fontsize=15)
+plt.xlabel("10-Year Change in Debt/GDP (percentage points)")
+plt.ylabel("Density")
+plt.grid(True, linestyle=":")
+plt.legend(fontsize=11)
+plt.tight_layout()
+#plt.savefig(output / "debt_10yr_change_distribution_ai_vs_baseline.pdf", dpi=300)
+plt.show()
 
 # -------------------------------------------------
 # Addendum - Using pre-OBBBA CBO s projections
