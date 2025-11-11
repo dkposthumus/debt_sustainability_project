@@ -393,144 +393,125 @@ all_sim_results = pd.concat(enriched_frames.values(), ignore_index=True)
 all_sim_results.to_csv(output / 'sdsa_enrichment1_sim_results.csv', index=False)
 
 # -------------------------------------------------
-# Addendum - AI Boom
+# Addendum - AI Boom Scenarios (0.5pp and 1pp Productivity Boost)
 # -------------------------------------------------
 
-'''
-I now do the following:
-- run simulations using cbo_ai['real_gdp'] as a_ug vs. cbo_forecasts['g (cbo baseline)'] 
-    as a_ug and SEPARATELY plot b_overlay for c = 0 and c = 0.15
-'''
+# Each scenario provides AI GDP paths, growth rates, and changes in primary deficit (% of GDP)
+# Baseline years 2025–2035
+years = np.arange(2025, 2036)
 
-a_ug_ai = [
-        2.1 / 100, 1.9 / 100, 2.0 / 100, 2.1 / 100, 2.3 / 100,
-        2.4 / 100, 2.4 / 100, 2.5 / 100, 2.5 / 100, 2.5 / 100, 2.4 / 100
-]
-# define growth rates
-a_ug_dict = {
-    'CBO Baseline': a_ug,  # e.g. list or np.array of growth rates
-    'CBO AI Boom': a_ug_ai
+# --- 0.5 pp productivity boost ---
+a_ug_ai_05 = np.array([
+    2.125, 1.938, 1.988, 2.088, 2.250,
+    2.411, 2.429, 2.466, 2.466, 2.451, 2.428
+]) / 100
+change_primary_deficit_pct_gdp_05 = np.array([
+    0.0, -0.019924279, -0.064984957, -0.137927756, -0.246002998,
+    -0.389646498, -0.545737236, -0.710450817, -0.885442132,
+    -1.068350832, -1.262290796
+]) / 100  # convert percentage points to decimals
+
+# --- 1 pp productivity boost ---
+a_ug_ai_10 = np.array([
+    2.125, 2.932, 2.906, 2.923, 2.997,
+    3.064, 3.093, 3.141, 3.150, 3.145, 3.131
+]) / 100
+change_primary_deficit_pct_gdp_10 = np.array([
+    0.0, -0.182794733, -0.445974749, -0.719954032,
+    -1.019645652, -1.331048263, -1.657538639,
+    -1.998705119, -2.348575081, -2.715048152,
+    -3.097080547
+]) / 100
+
+# Baseline paths (CBO)
+a_ug_baseline = a_ug
+a_s_baseline = a_s
+
+# Construct AI scenarios: shift the baseline primary balance by the improvement in deficit
+a_s_ai_05 = a_s_baseline - change_primary_deficit_pct_gdp_05
+a_s_ai_10 = a_s_baseline - change_primary_deficit_pct_gdp_10
+
+# Bundle both scenarios
+ai_scenarios = {
+    "AI Boom (0.5pp Productivity)": {
+        "a_ug": a_ug_ai_05,
+        "a_s": a_s_ai_05
+    },
+    "AI Boom (1.0pp Productivity)": {
+        "a_ug": a_ug_ai_10,
+        "a_s": a_s_ai_10
+    },
+    "CBO Baseline": {
+        "a_ug": a_ug_baseline,
+        "a_s": a_s_baseline
+    }
 }
 
-ai_real_gdp = [
-    23785.8,    24246.8,	24728.8,	25245.1,	
-    25813.1,	26435.5,	27077.5,	27745.2,	28429.3,	
-    29126.2,	29833.3
-]
-
-change_in_primary_deficit_billions = [
-    0,          -4.831,     -16.07,	    -34.82, 	
-    -63.501,	-103.005,	-147.772,	-197.116,	
-    -251.725,	-311.17,	-376.583,
-]
-change_in_primary_deficit_pct_gdp = np.array(change_in_primary_deficit_billions) / np.array(ai_real_gdp)
-
-a_s_ai = a_s - change_in_primary_deficit_pct_gdp
-
-# for context, plot a_ug paths
-plt.figure(figsize=(11,7))
-for label, a_ug_vec in a_ug_dict.items():
-    plt.plot(range(2025, 2025 + n_years), a_ug_vec, label=label)
-plt.axhline(y = 0, color='black', linestyle='--', linewidth=0.9)
-plt.title('Mean Growth Rate Paths: CBO Baseline vs. AI Boom')
-plt.xlabel('Year'); plt.ylabel('a_ug')
-plt.grid(True)
-plt.legend(loc='best', fontsize='x-large')
-plt.tight_layout()
-plt.savefig(output / 'sdsa_enrichment1_a_ug_paths_ai_boom.pdf', dpi=300)
-plt.show()
-
-# define c scenarios to plot
+# Define fiscal responsibility cases
 c_scenarios = {
-    'Irresponsible (c=0.00)': 0.00,
-    'Responsible(c=0.15)': 0.15
+    "Irresponsible (c=0.00)": 0.00,
+    "Responsible (c=0.15)": 0.15
 }
 
-# run sims and plot overlays 
-sim_results_by_augs = {}
-a_ug_dict = {
-    'CBO Baseline': {'a_ug': a_ug, 'a_s': a_s},
-    'CBO AI Boom': {'a_ug': a_ug_ai, 'a_s': a_s_ai}
-}
-for label, params in a_ug_dict.items():
-    a_ug_vec = params['a_ug']
-    a_s_vec = params['a_s']
+# Run simulations for all combinations
+sim_results_by_ai = {}
+for ai_label, params in ai_scenarios.items():
     for c_label, c_val in c_scenarios.items():
         df_sim = simulate_scenario(
-            c_val=c_val, a_s_vec=a_s_vec, a_ug=a_ug_vec,
-            r_star=r_star, beta_r=beta_r_dict['3 bps'], rho=rho, sigma=sigma,
+            c_val=c_val, a_s_vec=params["a_s"], a_ug=params["a_ug"],
+            r_star=r_star, beta_r=beta_r_dict["3 bps"], rho=rho, sigma=sigma,
             s_g=s_g, s_x=s_x, s_r=s_r, s_s=s_s,
             x0=0.0, r0=r0, b0=b0,
             n_years=n_years, n_simulations=n_sims,
-            label=f"{label} - {c_label}"
+            label=f"{ai_label} - {c_label}"
         )
-        sim_results_by_augs[f"{label} - {c_label}"] = df_sim
+        sim_results_by_ai[f"{ai_label} - {c_label}"] = df_sim
 
-# now plot b overlays for each c scenario
+# ---- Plot overlays: Debt paths ----
 for c_label, c_val in c_scenarios.items():
-    # filter to just this c scenario
-    filtered_sims = {k: v for k, v in sim_results_by_augs.items() if c_label in k}
-    # plot only debt path overlay by hand, no function
+    filtered = {k: v for k, v in sim_results_by_ai.items() if c_label in k}
+
     plt.figure(figsize=(11,7))
-    for label, df_sim in filtered_sims.items():
-        g = _band_by_year(df_sim, 'b')
-        plt.plot(g['year'], g['median'], label=label)
-        plt.fill_between(g['year'], g['p25'], g['p75'], alpha=0.20)
-    plt.axhline(y=b0, color='black', linestyle='--', linewidth=0.9)
+    for label, df_sim in filtered.items():
+        g = _band_by_year(df_sim, "b")
+        plt.plot(g["year"], g["median"], label=label)
+        plt.fill_between(g["year"], g["p25"], g["p75"], alpha=0.20)
+    plt.axhline(y=b0, color="black", linestyle="--", linewidth=0.9)
     plt.ylim(b0 - 0.1, 1.7)
-    plt.title(f'Debt (b): Median & IQR — AI Boom vs. Baseline ({c_label})')
-    plt.xlabel('Year'); plt.ylabel('b')
+    plt.title(f"Debt (b): Median & IQR — AI Boom Scenarios vs. Baseline ({c_label})")
+    plt.xlabel("Year"); plt.ylabel("Debt-to-GDP Ratio (b)")
     plt.grid(True)
-    plt.legend(loc='best', fontsize='x-large')
+    plt.legend(loc="best", fontsize="x-large")
     plt.tight_layout()
-    plt.savefig(output / f'sdsa_enrichment1_b_overlay_ai_boom_{c_val:.2f}.pdf', dpi=300)
+    plt.savefig(output / f"sdsa_enrichment1_b_overlay_ai_booms_{c_val:.2f}.pdf", dpi=300)
     plt.show()
 
-    # also overlay growth to make sure that our model is not hallucinating
-    plt.figure(figsize=(11,7))
-    for label, df_sim in filtered_sims.items():
-        g = _band_by_year(df_sim, 'g')
-        plt.plot(g['year'], g['median'], label=label)
-        plt.fill_between(g['year'], g['p25'], g['p75'], alpha=0.20)
-    plt.title(f'Growth (g): Median & IQR — AI Boom vs. Baseline ({c_label})')
-    plt.xlabel('Year'); plt.ylabel('g')
-    plt.ylim(0.0, 0.06)
-    plt.grid(True)
-    plt.legend(loc='best', fontsize='x-large')
-    plt.tight_layout()
-    plt.show()
-
-    # also plot r vs. g overlay 
-    plt.figure(figsize=(11,7))
-    for label, df_sim in filtered_sims.items():
-        g = _band_by_year(df_sim, 'r_av')
-        plt.plot(g['year'], g['median'], label=f"{label} - r_av")
-        plt.fill_between(g['year'], g['p25'], g['p75'], alpha=0.10)
-        g_g = _band_by_year(df_sim, 'g')
-        plt.plot(g_g['year'], g_g['median'], label=f"{label} - g", linestyle='--')
-    plt.title(f'Interest Rate (r_av) vs. Growth (g): Median & IQR — AI Boom vs. Baseline ({c_label})')
-    plt.xlabel('Year'); plt.ylabel('r_av and g')
-    plt.ylim(0.0, 0.06)
-    plt.grid(True)
-    plt.legend(loc='best', fontsize='x-large')
-    plt.tight_layout()
-    plt.show()
+# ---- Optional overlay for growth ----
+plt.figure(figsize=(11,7))
+for ai_label, params in ai_scenarios.items():
+    plt.plot(years, params["a_ug"], label=ai_label)
+plt.axhline(y=0, color="black", linestyle="--", linewidth=0.9)
+plt.title("Mean Growth Rate Paths: Baseline vs. AI Productivity Scenarios")
+plt.xlabel("Year"); plt.ylabel("a_ug (growth rate)")
+plt.grid(True)
+plt.legend(fontsize="x-large")
+plt.tight_layout()
+plt.savefig(output / "sdsa_enrichment1_a_ug_paths_ai_booms.pdf", dpi=300)
+plt.show()
 
 # ============================================================
-# Distribution of 10-year Debt Changes — AI vs Baseline
+# Distribution of 10-Year Debt Changes — AI vs Baseline (c = 0.15 only)
 # ============================================================
 
-# ── historical benchmark ─────────────────────────────────────
-# Example: you already have a quarterly debt series `debt_q4`
-# with levels in ratio form (debt/GDP). We compute 10y diffs.
+# ── historical benchmark (FRED series) ───────────────────────
 debt = get_fred_series('FYGFGDQ188S', 'Federal Debt Held by the Public')
 debt.columns = debt.columns.str.lower()
 debt.rename(columns={'federal debt held by the public': 'debt'}, inplace=True)
 debt['debt'] = debt['debt'] / 100.0  # percent → decimal
-# keep one observation per year (Q4). Many FRED quarter stamps are quarter-start dates; Q4==October works.
 debt_q4 = debt[debt['date'].dt.month == 10].sort_values('date').copy()
 debt_q4['debt_10yr_change'] = debt_q4['debt'].diff(10) * 100  # 40 quarters = 10 years
 historical_changes = debt_q4['debt_10yr_change'].dropna()
+
 # ── helper to compute simulated 10y changes ──────────────────
 def compute_ten_year_changes(df: pd.DataFrame) -> np.ndarray:
     """Compute 10-year change in debt/GDP (pp) per simulation."""
@@ -541,37 +522,40 @@ def compute_ten_year_changes(df: pd.DataFrame) -> np.ndarray:
         changes.append(change)
     return np.array(changes)
 
-# ── collect four distributions ───────────────────────────────
-distros = {}
+# ── collect three scenarios (c = 0.15 only) ──────────────────
 target_labels = [
-    "CBO Baseline - Irresponsible (c=0.00)",
-    "CBO Baseline - Responsible(c=0.15)",
-    "CBO AI Boom - Irresponsible (c=0.00)",
-    "CBO AI Boom - Responsible(c=0.15)"
+    "CBO Baseline - Responsible (c=0.15)",
+    "AI Boom (0.5pp Productivity) - Responsible (c=0.15)",
+    "AI Boom (1.0pp Productivity) - Responsible (c=0.15)"
 ]
+distros = {}
 for label in target_labels:
-    if label not in sim_results_by_augs:
+    if label not in sim_results_by_ai:
         print(f"Warning: {label} not found in results")
         continue
-    distros[label] = compute_ten_year_changes(sim_results_by_augs[label])
+    distros[label] = compute_ten_year_changes(sim_results_by_ai[label])
 
 # ── plot overlay of distributions ─────────────────────────────
 plt.figure(figsize=(12, 8))
 palette = {
-    "CBO Baseline - Irresponsible (c=0.00)": "#1f77b4",
-    "CBO Baseline - Responsible(c=0.15)": "#2ca02c",
-    "CBO AI Boom - Irresponsible (c=0.00)": "#ff7f0e",
-    "CBO AI Boom - Responsible(c=0.15)": "#d62728",
+    "CBO Baseline - Responsible (c=0.15)": "#1f77b4",
+    "AI Boom (0.5pp Productivity) - Responsible (c=0.15)": "#ff7f0e",
+    "AI Boom (1.0pp Productivity) - Responsible (c=0.15)": "#d62728",
 }
 
 for label, data in distros.items():
     sns.kdeplot(data, label=label, fill=False, linewidth=2.0, color=palette[label])
     median_val = np.median(data)
     plt.axvline(median_val, color=palette[label], linestyle="--", linewidth=1.2)
-    '''plt.text(median_val + 0.1, plt.ylim()[1]*0.9,
-             f"{median_val:.1f}", color=palette[label], fontsize=10)'''
+    plt.text(
+        median_val + 0.1,
+        plt.ylim()[1] * 0.9,
+        f"{median_val:.1f}",
+        color=palette[label],
+        fontsize=10
+    )
 
-# ── add historical overlay ───────────────────────────────────
+# ── historical overlay for context ───────────────────────────
 sns.kdeplot(historical_changes, label="Historical (Observed)", color="black",
             linestyle=":", linewidth=2.0)
 median_hist = np.median(historical_changes)
@@ -580,14 +564,14 @@ plt.text(median_hist + 0.1, plt.ylim()[1]*0.8,
          f"{median_hist:.1f}", color="black", fontsize=10)
 
 # ── aesthetics ───────────────────────────────────────────────
-plt.title("Distribution of 10-Year Changes in Debt/GDP\nAI Boom vs. Baseline — c=0 and c=0.15",
+plt.title("Distribution of 10-Year Changes in Debt/GDP\nResponsible Fiscal Regime (c=0.15): AI Booms vs. Baseline",
           fontsize=15)
 plt.xlabel("10-Year Change in Debt/GDP (percentage points)")
 plt.ylabel("Density")
 plt.grid(True, linestyle=":")
 plt.legend(fontsize=11)
 plt.tight_layout()
-#plt.savefig(output / "debt_10yr_change_distribution_ai_vs_baseline.pdf", dpi=300)
+plt.savefig(output / "debt_10yr_change_distribution_ai_booms_responsible.pdf", dpi=300)
 plt.show()
 
 # -------------------------------------------------
