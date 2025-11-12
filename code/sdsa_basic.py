@@ -524,9 +524,9 @@ def compute_ten_year_changes(df: pd.DataFrame) -> np.ndarray:
 
 # ── collect three scenarios (c = 0.15 only) ──────────────────
 target_labels = [
+    "CBO Baseline - Irresponsible (c=0.00)",
+    "AI Boom (1.0pp Productivity) - Irresponsible (c=0.00)",
     "CBO Baseline - Responsible (c=0.15)",
-    "AI Boom (0.5pp Productivity) - Responsible (c=0.15)",
-    "AI Boom (1.0pp Productivity) - Responsible (c=0.15)"
 ]
 distros = {}
 for label in target_labels:
@@ -534,45 +534,6 @@ for label in target_labels:
         print(f"Warning: {label} not found in results")
         continue
     distros[label] = compute_ten_year_changes(sim_results_by_ai[label])
-
-# ── plot overlay of distributions ─────────────────────────────
-plt.figure(figsize=(12, 8))
-palette = {
-    "CBO Baseline - Responsible (c=0.15)": "#1f77b4",
-    "AI Boom (0.5pp Productivity) - Responsible (c=0.15)": "#ff7f0e",
-    "AI Boom (1.0pp Productivity) - Responsible (c=0.15)": "#d62728",
-}
-
-for label, data in distros.items():
-    sns.kdeplot(data, label=label, fill=False, linewidth=2.0, color=palette[label])
-    median_val = np.median(data)
-    plt.axvline(median_val, color=palette[label], linestyle="--", linewidth=1.2)
-    plt.text(
-        median_val + 0.1,
-        plt.ylim()[1] * 0.9,
-        f"{median_val:.1f}",
-        color=palette[label],
-        fontsize=10
-    )
-
-# ── historical overlay for context ───────────────────────────
-sns.kdeplot(historical_changes, label="Historical (Observed)", color="black",
-            linestyle=":", linewidth=2.0)
-median_hist = np.median(historical_changes)
-plt.axvline(median_hist, color="black", linestyle=":", linewidth=1.2)
-plt.text(median_hist + 0.1, plt.ylim()[1]*0.8,
-         f"{median_hist:.1f}", color="black", fontsize=10)
-
-# ── aesthetics ───────────────────────────────────────────────
-plt.title("Distribution of 10-Year Changes in Debt/GDP\nResponsible Fiscal Regime (c=0.15): AI Booms vs. Baseline",
-          fontsize=15)
-plt.xlabel("10-Year Change in Debt/GDP (percentage points)")
-plt.ylabel("Density")
-plt.grid(True, linestyle=":")
-plt.legend(fontsize=11)
-plt.tight_layout()
-plt.savefig(output / "debt_10yr_change_distribution_ai_booms_responsible.pdf", dpi=300)
-plt.show()
 
 # ============================================================
 # Distribution of net interest rate payments — AI vs Baseline (c = 0.15 only)
@@ -602,9 +563,9 @@ sns.histplot(
 )
 
 graphing_labels = {
-    "CBO Baseline - Responsible (c=0.15)": "CBO Baseline",
-    "AI Boom (0.5pp Productivity) - Responsible (c=0.15)": "AI Boom (0.5pp Productivity)",
-    "AI Boom (1.0pp Productivity) - Responsible (c=0.15)": "AI Boom (1.0pp Productivity)"
+    "CBO Baseline - Irresponsible (c=0.00)": "No AI Boom - Baseline",
+    "CBO Baseline - Responsible (c=0.15)": "No AI Boom - Responsible",
+    "AI Boom (1.0pp Productivity) - Irresponsible (c=0.00)": "AI Boom - 1.0pp Productivity, Baseline"
 }
 
 for ai_scenario in target_labels:
@@ -624,8 +585,14 @@ for ai_scenario in target_labels:
         alpha=1, linestyle='--'
     )
 
-plt.title("Net Interest Payments as % of GDP: Historical vs Simulated")
-plt.xlabel("Net Interest (% of GDP)")
+    if ai_scenario == "AI Boom (1.0pp Productivity) - Irresponsible (c=0.00)":
+        # print percentage of simulations above max of historical series
+        max_historic = net_interest_series.max()
+        pct_above = (sim_df['net_interest_sim'] > max_historic).mean() * 100
+        print(f"Percentage of simulations with net interest > {max_historic:.2f}%: {pct_above:.2f}%")
+
+plt.title("Interest Payments as % of GDP: Historical vs Simulated")
+plt.xlabel("Interest (% of GDP)")
 plt.ylabel("Density (Relative Frequency)")
 plt.legend()
 plt.tight_layout()
