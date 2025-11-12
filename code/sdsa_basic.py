@@ -574,6 +574,179 @@ plt.tight_layout()
 plt.savefig(output / "debt_10yr_change_distribution_ai_booms_responsible.pdf", dpi=300)
 plt.show()
 
+# ============================================================
+# Distribution of net interest rate payments — AI vs Baseline (c = 0.15 only)
+# ============================================================
+
+# 1. Pull historical net interest payments (% of GDP)
+net_interest = get_fred_series('A091RC1Q027SBEA', 'net_interest')  
+gdp = get_fred_series('GDP', 'gdp')
+net_interest = net_interest.merge(gdp, on='date', how='inner')
+net_interest['net_interest_pct_gdp'] = (net_interest['net_interest'] / net_interest['gdp']) * 100
+net_interest = net_interest[['date', 'net_interest_pct_gdp', 'gdp']]
+net_interest = net_interest[net_interest['date'].dt.month == 10]  # annualize using Q4 values
+net_interest = net_interest.sort_values('date')
+net_interest_df = net_interest.copy()
+net_interest_series = net_interest['net_interest_pct_gdp'].dropna()
+
+# 2. Plot historical vs simulated distributions (transparent histograms)
+plt.figure(figsize=(8,5))
+sns.histplot(
+    net_interest_series,
+    label="Historical",
+    stat="density",
+    element="step",     # outline only
+    fill=False,
+    linewidth=2.5,
+    alpha=1
+)
+
+graphing_labels = {
+    "CBO Baseline - Responsible (c=0.15)": "CBO Baseline",
+    "AI Boom (0.5pp Productivity) - Responsible (c=0.15)": "AI Boom (0.5pp Productivity)",
+    "AI Boom (1.0pp Productivity) - Responsible (c=0.15)": "AI Boom (1.0pp Productivity)"
+}
+
+for ai_scenario in target_labels:
+    if ai_scenario not in sim_results_by_ai:
+        continue
+    sim_df = sim_results_by_ai[ai_scenario]
+    sim_df['net_interest_sim'] = (sim_df['r_av']) / (1 + sim_df['g']) * sim_df['b'].shift(1).fillna(b0)
+    sim_df['net_interest_sim'] *= 100  # convert to percent
+    
+    sns.histplot(
+        sim_df['net_interest_sim'],
+        label=graphing_labels[ai_scenario],
+        stat="density",
+        element="step",
+        fill=False,
+        linewidth=1.5,
+        alpha=1, linestyle='--'
+    )
+
+plt.title("Net Interest Payments as % of GDP: Historical vs Simulated")
+plt.xlabel("Net Interest (% of GDP)")
+plt.ylabel("Density (Relative Frequency)")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# Effective interest rate comparison (historical vs simulated)
+# ============================================================
+
+debt_gdp = get_fred_series('FYGFGDQ188S', 'debt_held_by_public')  # in percent of GDP
+growth = get_fred_series('A191RL1Q225SBEA', 'real_gdp_growth_rate')  # quarterly real GDP growth rate
+
+net_interest_df = (
+    net_interest_df
+    .merge(debt_gdp, on='date', how='inner')
+    .merge(growth, on='date', how='inner')
+)
+net_interest_df['effective_r'] = net_interest_df['net_interest_pct_gdp'] / net_interest_df['debt_held_by_public']
+
+plt.figure(figsize=(8,5))
+sns.histplot(
+    net_interest_df['effective_r'],
+    label="Historical",
+    stat="density",
+    element="step",
+    fill=False,
+    linewidth=2.5,
+    alpha=1
+)
+
+for ai_scenario in target_labels:
+    if ai_scenario not in sim_results_by_ai:
+        continue
+    sim_df = sim_results_by_ai[ai_scenario]
+    sns.histplot(
+        sim_df['r_av'],
+        label=graphing_labels[ai_scenario],
+        stat="density",
+        element="step",
+        fill=False,
+        linewidth=1.5,
+        alpha=1, linestyle='--'
+    )
+plt.ylim(0, 200)
+plt.title("Effective Interest Rate on Debt: Historical vs Simulated")
+plt.xlabel("Effective Interest Rate (r_av)")
+plt.ylabel("Density (Relative Frequency)")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# now compare the debt accumulation snowball term (r^av - g) / (1 + g) * b[-1] to this same term applied historically
+net_interest_df['debt_snowball_term'] = (
+    (net_interest_df['effective_r'] - net_interest_df['real_gdp_growth_rate']) /
+    (1 + net_interest_df['real_gdp_growth_rate'] / 100)
+) * (net_interest_df['debt_held_by_public'] / 100)
+plt.figure(figsize=(8,5))
+sns.histplot(
+    net_interest_df['debt_snowball_term'],
+    label="Historical",
+    stat="density",
+    element="step",
+    fill=False,
+    linewidth=2.5,
+    alpha=1
+)
+for ai_scenario in target_labels:
+    if ai_scenario not in sim_results_by_ai:
+        continue
+    sim_df = sim_results_by_ai[ai_scenario]
+    sim_df['debt_snowball_sim'] = (
+        (sim_df['r_av'] - sim_df['g']) / (1 + sim_df['g'])
+    ) * sim_df['b'].shift(1).fillna(b0) * 100  # convert to percent
+    sns.histplot(
+        sim_df['debt_snowball_sim'],
+        label=graphing_labels[ai_scenario],
+        stat="density",
+        element="step",
+        fill=False,
+        linewidth=1.5,
+        alpha=1, linestyle='--'
+    )
+plt.title("Debt Accumulation Snowball Term: Historical vs Simulated")
+plt.xlabel("Debt Snowball Term")
+plt.ylabel("Density (Relative Frequency)")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# now compare r_av - g directly
+plt.figure(figsize=(8,5))
+sns.histplot(
+    net_interest_df['effective_r'] - net_interest_df['real_gdp_growth_rate'],
+    label="Historical",
+    stat="density",
+    element="step",
+    fill=False,
+    linewidth=2.5,
+    alpha=1
+)
+for ai_scenario in target_labels:
+    if ai_scenario not in sim_results_by_ai:
+        continue
+    sim_df = sim_results_by_ai[ai_scenario]
+    sim_df['rg_sim'] = (sim_df['r_av'] - sim_df['g']) * 100  # convert to percent
+    sns.histplot(
+        sim_df['rg_sim'],
+        label=graphing_labels[ai_scenario],
+        stat="density",
+        element="step",
+        fill=False,
+        linewidth=1.5,
+        alpha=1, linestyle='--'
+    )
+plt.title("Interest-Growth Differential (r_av - g): Historical vs Simulated")
+plt.xlabel("r_av - g")
+plt.ylabel("Density (Relative Frequency)")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
 # -------------------------------------------------
 # Addendum - Using pre-OBBBA CBO s projections
 # -------------------------------------------------
