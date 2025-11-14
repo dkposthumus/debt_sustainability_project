@@ -6,6 +6,8 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import matplotlib.lines as mlines
 from pathlib import Path
 from fredapi import Fred
 import statsmodels.api as sm
@@ -450,7 +452,8 @@ ai_scenarios = {
 # Define fiscal responsibility cases
 c_scenarios = {
     "Irresponsible (c=0.00)": 0.00,
-    "Responsible (c=0.15)": 0.15
+    "Responsible (c=0.15)": 0.15,
+    "Very Responsible (c=0.30)": 0.30
 }
 
 # Run simulations for all combinations
@@ -525,8 +528,17 @@ def compute_ten_year_changes(df: pd.DataFrame) -> np.ndarray:
 # ── collect three scenarios (c = 0.15 only) ──────────────────
 target_labels = [
     "CBO Baseline - Irresponsible (c=0.00)",
-    "AI Boom (1.0pp Productivity) - Irresponsible (c=0.00)",
+    "AI Boom (0.5pp Productivity) - Irresponsible (c=0.00)",
     "CBO Baseline - Responsible (c=0.15)",
+    "AI Boom (1.0pp Productivity) - Very Responsible (c=0.30)",
+    "AI Boom (1.0pp Productivity) - Irresponsible (c=0.00)",
+    "CBO Baseline - Very Responsible (c=0.30)"
+]
+target_labels = [
+    "CBO Baseline - Irresponsible (c=0.00)",
+    "CBO Baseline - Responsible (c=0.15)",
+    "CBO Baseline - Very Responsible (c=0.30)",
+    "AI Boom (0.5pp Productivity) - Irresponsible (c=0.00)",
 ]
 distros = {}
 for label in target_labels:
@@ -550,31 +562,24 @@ net_interest = net_interest.sort_values('date')
 net_interest_df = net_interest.copy()
 net_interest_series = net_interest['net_interest_pct_gdp'].dropna()
 
-# 2. Plot historical vs simulated distributions (transparent histograms)
-plt.figure(figsize=(8,5))
-sns.histplot(
-    net_interest_series,
-    label="Historical",
-    stat="density",
-    element="step",     # outline only
-    fill=False,
-    linewidth=2.5,
-    alpha=1
+plt.rcParams['axes.prop_cycle'] = plt.cycler(
+    color=["#1f77b4", "#9467bd", "#8c564b", "#7f7f7f", "#17becf", "#ff7f0e"]
 )
 
+# 2. Plot historical vs simulated distributions (transparent histograms)
+plt.figure(figsize=(8,5))
 graphing_labels = {
-    "CBO Baseline - Irresponsible (c=0.00)": "No AI Boom - Baseline",
-    "CBO Baseline - Responsible (c=0.15)": "No AI Boom - Responsible",
-    "AI Boom (1.0pp Productivity) - Irresponsible (c=0.00)": "AI Boom - 1.0pp Productivity, Baseline"
+    "CBO Baseline - Irresponsible (c=0.00)": "Baseline",
+    "CBO Baseline - Responsible (c=0.15)": "Responsive",
+    "AI Boom (0.5pp Productivity) - Irresponsible (c=0.00)": "AI Boom",
+    "CBO Baseline - Very Responsible (c=0.30)": "Very Responsive"
 }
-
 for ai_scenario in target_labels:
-    if ai_scenario not in sim_results_by_ai:
-        continue
+    if ai_scenario != "CBO Baseline - Very Responsible (c=0.30)":
+        continue  # skip baseline here; plot last
     sim_df = sim_results_by_ai[ai_scenario]
     sim_df['net_interest_sim'] = (sim_df['r_av']) / (1 + sim_df['g']) * sim_df['b'].shift(1).fillna(b0)
     sim_df['net_interest_sim'] *= 100  # convert to percent
-    
     sns.histplot(
         sim_df['net_interest_sim'],
         label=graphing_labels[ai_scenario],
@@ -582,19 +587,55 @@ for ai_scenario in target_labels:
         element="step",
         fill=False,
         linewidth=1.5,
-        alpha=1, linestyle='--'
+        alpha=1, linestyle='-'
     )
-
-    if ai_scenario == "AI Boom (1.0pp Productivity) - Irresponsible (c=0.00)":
-        # print percentage of simulations above max of historical series
-        max_historic = net_interest_series.max()
-        pct_above = (sim_df['net_interest_sim'] > max_historic).mean() * 100
-        print(f"Percentage of simulations with net interest > {max_historic:.2f}%: {pct_above:.2f}%")
-
-plt.title("Interest Payments as % of GDP: Historical vs Simulated")
+# one vertical line for current value 
+current_value = net_interest_df['net_interest_pct_gdp'].iloc[-1]
+plt.axvline(x=current_value, color='black', linestyle='--', linewidth=0.9, 
+            label='_nolegend_')
+# another vertical line for max historical value 
+max_historic = net_interest_series.max()
+plt.axvline(x=max_historic, color='gray', linestyle='--', linewidth=0.9, 
+            label='_nolegend_')
+# figure out standard deviation of historical series
+std_historic = net_interest_series.std()
+plt.axvline(x=max_historic + std_historic, color='blue', linestyle='--', linewidth=0.9, 
+            label='_nolegend_')
+# shade everything to the right of max historical value
+plt.axvspan(max_historic + std_historic, plt.xlim()[1], color='red', alpha=0.1)
+# print out share of simulations to the right of max historical value 
+for ai_scenario in target_labels:
+    if ai_scenario not in sim_results_by_ai:
+        continue
+    sim_df = sim_results_by_ai[ai_scenario]
+    sim_df['net_interest_sim'] = (sim_df['r_av']) / (1 + sim_df['g']) * sim_df['b'].shift(1).fillna(b0)
+    sim_df['net_interest_sim'] *= 100  # convert to percent
+    pct_above = (sim_df['net_interest_sim'] > max_historic).mean() * 100
+    print(f"{graphing_labels[ai_scenario]}: Percentage of simulations with net interest > {max_historic:.2f}%: {pct_above:.2f}%")
+    # re-do w/ one std. above historic max
+    pct_above_std = (sim_df['net_interest_sim'] > (max_historic + std_historic)).mean() * 100
+    print(f"{graphing_labels[ai_scenario]}: Percentage of simulations with net interest > {max_historic + std_historic:.2f}%: {pct_above_std:.2f}%")
+plt.title("Interest Payments as % of GDP")
 plt.xlabel("Interest (% of GDP)")
-plt.ylabel("Density (Relative Frequency)")
-plt.legend()
+plt.ylabel("Likelihood")
+# ============================================================
+# CUSTOM LEGEND WITH SPACER + CLEAN VERTICAL-LINE HANDLES
+# ============================================================
+# get histogram handles first
+handles, labels = plt.gca().get_legend_handles_labels()
+# spacer (draws nothing, creates vertical gap)
+spacer = mpatches.Patch(color='none', label="")
+# custom handles for vertical lines
+h_current = mlines.Line2D([], [], color='black', linestyle='--', linewidth=0.9,
+                          label="Level Today")
+h_max = mlines.Line2D([], [], color='gray', linestyle='--', linewidth=0.9,
+                      label="Historical Max")
+h_danger = mlines.Line2D([], [], color='blue', linestyle='--', linewidth=0.9,
+                         label="Danger Zone")
+# combine them: (1) all histograms, (2) spacer, (3) all vertical-line items
+handles = handles + [spacer, h_current, h_max, h_danger]
+labels = labels + ["", "Level Today", "Historical Max", "Danger Zone"]
+plt.legend(handles, labels)
 plt.tight_layout()
 plt.show()
 
