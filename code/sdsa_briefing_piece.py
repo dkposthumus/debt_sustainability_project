@@ -169,7 +169,8 @@ plt.plot(debt_q4['date'], debt_q4['debt'], label='Observed Debt/GDP (Q4)', color
 plt.plot(debt_q4['date'], debt_q4['slope_sg'], label='Slope (SG, W=9, p=2)', color='blue', alpha=0.75)
 plt.plot(debt_q4['date'], debt_q4['curvature_sg'], label='Curvature (SG, W=9, p=2)', color='red', alpha=0.75)
 plt.axhline(0, color='black', linestyle='--', linewidth=0.8)
-plt.title('U.S. Debt Path with Savitzky–Golay Smoothing (Q4 observations)')
+plt.title('')
+plt.xlabel('')
 plt.ylabel('Debt/GDP (level) and derivatives')
 plt.grid(True)
 filtered_recession_df = recession_df[recession_df['date'] >= debt_q4['date'].min()]
@@ -183,7 +184,8 @@ plt.show()
 plt.figure(figsize=(12, 8))
 plt.plot(debt_q4['date'], debt_q4['curvature_log_sg'], label='Curvature of log(debt/GDP) (SG, W=9, p=2)', alpha=0.85)
 plt.axhline(0, color='black', linestyle='--', linewidth=0.8)
-plt.title('Medium-run Curvature of U.S. Debt Path (Q4 observations)')
+plt.title('')
+plt.xlabel('')
 plt.ylabel('Second derivative (per year²)')
 plt.grid(True)
 filtered_recession_df = recession_df[recession_df['date'] >= debt_q4['date'].min()]
@@ -204,35 +206,79 @@ sim_results = pd.read_csv(f'{output}/sdsa_enrichment1_sim_results.csv')
 debt_q4['debt_10yr_change'] = debt_q4['debt'].diff(10) * 100  # convert to percentage points
 # drop NA values
 historical_changes = debt_q4['debt_10yr_change'].dropna()
+
 # # plot the distributions using seaborn
 plt.figure(figsize=(12, 8))
-for c_vals, color in zip([0, 0.15, 0.30],
-                         ['blue', 'green', 'red']):
+ax = plt.gca()
+# (Optional but recommended) consistent binning across all overlays
+all_changes = []
+# ---- simulated distributions (step outlines, no fill) ----
+for c_vals, color in zip([0, 0.15, 0.30], ['blue', 'green', 'red']):
     subset = sim_results[sim_results['c'] == c_vals]
     yr10_changes = []
     for i in subset['sim'].unique():
         sim_df = subset[subset['sim'] == i].sort_values('year').reset_index(drop=True)
         change = (sim_df['b'].iloc[-1] - sim_df['b'].iloc[0]) * 100  # percentage points
         yr10_changes.append(change)
-    sns.kdeplot(yr10_changes, label=f'Simulated 10-year Changes (c={c_vals})', 
-                fill=False, color=color)
-    # add median line
+    all_changes.extend(yr10_changes)
+# include historical in bin range too
+all_changes.extend(list(historical_changes))
+# define shared bins (step-look is much nicer with shared bins)
+bins = np.histogram_bin_edges(all_changes, bins=30)
+for c_vals, color in zip([0, 0.15, 0.30], ['blue', 'green', 'red']):
+    subset = sim_results[sim_results['c'] == c_vals]
+    yr10_changes = []
+    for i in subset['sim'].unique():
+        sim_df = subset[subset['sim'] == i].sort_values('year').reset_index(drop=True)
+        change = (sim_df['b'].iloc[-1] - sim_df['b'].iloc[0]) * 100
+        yr10_changes.append(change)
+    sns.histplot(
+        yr10_changes,
+        bins=50,
+        stat="density",
+        element="step",
+        fill=False,
+        linewidth=1.6,
+        color=color,
+        label=f"Simulated 10-year Changes (c={c_vals})",
+        ax=ax,
+    )
+    # median line
     median_change = np.median(yr10_changes)
-    plt.axvline(median_change, linestyle='--', 
-                label=f'Median Simulated (c={c_vals}): {median_change:.2f} pp', color=color)
-sns.kdeplot(historical_changes, label='Observed 10-year Changes', color='orange', 
-            fill=False)
-# add median 
+    ax.axvline(
+        median_change,
+        linestyle="--",
+        color=color,
+        linewidth=1.6,
+        label=f"_nolegend_",
+    )
+# ---- observed / historical distribution (bold black step outline) ----
+sns.histplot(
+    historical_changes,
+    bins=20,
+    stat="density",
+    element="step",
+    fill=False,
+    linewidth=3.0,
+    color="black",
+    label="Observed 10-year Changes",
+    ax=ax,
+)
 median_historical = np.median(historical_changes)
-plt.axvline(median_historical, color='orange', linestyle='--', 
-            label=f'Median Observed: {median_historical:.2f} pp')
-plt.title('Distribution of 10-year Changes in Debt/GDP: Historical vs Simulated')
-plt.xlabel('10-year Change in Debt/GDP (percentage points)')
-plt.ylabel('Density')
-plt.legend()
-plt.grid(True)
+ax.axvline(
+    median_historical,
+    color="black",
+    linestyle="--",
+    linewidth=3.0,
+    label="_nolegend_",
+)
+ax.set_title("")
+ax.set_xlabel("10-year Change in Debt/GDP (percentage points)")
+ax.set_ylabel("Density")
+ax.legend()
+ax.grid(True)
 plt.tight_layout()
-plt.savefig(f'{output}/debt_10yr_change_distribution.pdf', dpi=300)
+plt.savefig(f"{output}/debt_10yr_change_distribution.pdf", dpi=300)
 plt.show()
 
 ################################################################################
