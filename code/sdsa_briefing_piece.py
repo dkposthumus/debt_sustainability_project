@@ -253,7 +253,7 @@ for c_vals, color in zip([0, 0.15, 0.30], ['blue', 'green', 'red']):
         label=f"_nolegend_",
     )
 # ---- observed / historical distribution (bold black step outline) ----
-sns.histplot(
+'''sns.histplot(
     historical_changes,
     bins=20,
     stat="density",
@@ -271,11 +271,19 @@ ax.axvline(
     linestyle="--",
     linewidth=3.0,
     label="_nolegend_",
+)'''
+ax.axvline(
+    0,
+    color="black",
+    linestyle="--",
+    linewidth=1.6,
+    label="Zero Change Line",
 )
-ax.set_title("")
+ax.set_title("10-Year in Debt/GDP by Level of Congressional Responsibility", 
+             fontsize='x-large')
 ax.set_xlabel("10-year Change in Debt/GDP (percentage points)")
 ax.set_ylabel("Density")
-ax.legend()
+ax.legend(fontsize='large', loc='best')
 ax.grid(True)
 plt.tight_layout()
 plt.savefig(f"{output}/debt_10yr_change_distribution.pdf", dpi=300)

@@ -695,14 +695,17 @@ def plot_primary_balance_story_popouts(
     ax.axhline(0, color="black", linestyle="--", linewidth=1.0, alpha=0.8)
     ax.set_xlabel("")
     ax.set_ylabel("Primary balance (% of GDP; surplus positive)")
-    ax.set_title("")  # per your request
+    ax.set_title("Ahistorical Adjustment by Projected Level of Congressional Responsibility",
+                 fontsize=20)  # per your request
     ax.grid(True, alpha=0.35)
 
     # legend: ONLY scenario colors + historical entry
-    handles = [Line2D([0], [0], color="black", linewidth=2.5, label="Historical primary balance")]
+    handles = [Line2D([0], [0], color="black", linewidth=2.5, 
+                      label="Historical primary balance")]
     for sc_label, (_, _, color) in scenario_summaries.items():
-        handles.append(Line2D([0], [0], color=color, linewidth=3.0, label=sc_label))
-    ax.legend(handles=handles, loc="best", fontsize="large")
+        handles.append(Line2D([0], [0], color=color, linewidth=3.0, 
+                              label=sc_label))
+    ax.legend(handles=handles, loc="best", fontsize="x-large")
 
     # set x-limits nicely
     xmin = pd.to_datetime(f"{hist_start_year}-01-01")
