@@ -140,6 +140,7 @@ snowball_hist['calendar_year'] = snowball_hist['date'].dt.year
 snowball_hist = snowball_hist[(snowball_hist['calendar_year'] >= 2005) &
                                 (snowball_hist['calendar_year'] <= 2025)].copy()
 snowball_hist = debt_hist.merge(snowball_hist, on='calendar_year', how='left')
+snowball_hist['rg_hist'] = (snowball_hist['interest_rate'] - snowball_hist['gdp_growth_rate']) / 100.0
 snowball_hist['snowball'] = (snowball_hist['interest_rate'] - snowball_hist['gdp_growth_rate']) / 100.0 * snowball_hist['b_hist']
 
 # -------------------------------------------------
@@ -206,7 +207,7 @@ def simulate_scenario(
             db_t_1 = (b[t-1] - b[t-2]) if t >= 2 else 0.0       # Δb_{t-1}
             db_t_2 = (b[t-2] - b[t-3]) if t >= 3 else 0.0       # Δb_{t-2}
             dr_t_1 = (r[t-1] - r[t-2]) if t >= 2 else 0.0       # Δr_{t-1}
-            eta_t  = eps_r - eps_r_prev                          # MA(1) innovation
+            eta_t  = eps_r - eps_r_prev                         # MA(1) innovation
 
             # FIRST-DIFFERENCE r update
             dr_t = beta_r * (db_t_1 - rho * db_t_2) + rho * dr_t_1 + eta_t
@@ -339,6 +340,13 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
             )
             plt.axvline(sim_start_year, color="black", linestyle="--", linewidth=0.9, alpha=0.8,
                     label="_nolegend_")
+        if var == 'rg':
+            plt.plot(
+                snowball_hist["calendar_year"], snowball_hist["rg_hist"],
+                color="black", linewidth=3.0, label="Historical (FRED, 2005–2025)"
+            )
+            plt.axvline(sim_start_year, color="black", linestyle="--", linewidth=0.9, alpha=0.8,
+                    label="_nolegend_")            
         if var == "snowball":
             plt.plot(
                 snowball_hist["calendar_year"], snowball_hist["snowball"],
@@ -426,14 +434,14 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
                   'r_av',
                   yline=r_star,
                   ylim_key='r_av',
-                  fname='sdsa_enrichment1_r_av_overlay.pdf')
+                  fname='sdsa_enrichment1_r_av_overlay.pdf')'''
 
     _plot_overlay('rg',
-                  'Interest-Growth Differential (r - g): Median & IQR — Regimes',
+                  'Interest-Growth Differential (r - g)',
                   'r - g',
                   yline=0.0,
                   ylim_key='rg',
-                  fname='sdsa_enrichment1_rg_overlay.pdf')'''
+                  fname='sdsa_enrichment1_rg_overlay.pdf')
 
     _plot_overlay('b',
                   'Debt (b): Median & IQR — Regimes',
@@ -943,6 +951,33 @@ for c_label, c_val in c_scenarios.items():
     plt.close()
 
     # -------------------------
+    # (r-g)) overlay (historical + simulated)
+    # -------------------------
+    plt.figure(figsize=(11,7))
+    # historical
+    plt.plot(
+        snowball_hist["calendar_year"], snowball_hist["rg_hist"],
+        color="black", linewidth=3.0, label="Historical (2000–2025)"
+    )
+    plt.axvline(SIM_START_YEAR, color="black", linestyle="--", linewidth=0.9, alpha=0.8, label="_nolegend_")
+    # simulated
+    for label, df_sim in filtered.items():
+        df_sim = df_sim.copy()
+        df_sim["calendar_year"] = SIM_START_YEAR + df_sim["year"] - 1
+        df_sim["r_minus_g"] = df_sim["r_av"] - df_sim["g"]
+        g = _band_by_year(df_sim, "r_minus_g", time_col="calendar_year")
+        plt.plot(g["time"], g["median"], label=label)
+        plt.fill_between(g["time"], g["p25"], g["p75"], alpha=0.20)
+    plt.axhline(y=0, color="black", linestyle="--", linewidth=0.9)
+    plt.xlim(debt_hist["calendar_year"].min(), SIM_START_YEAR + n_years - 1)
+    plt.xlabel(""); plt.ylabel("Interest-Growth Differential (r - g)")
+    plt.grid(True)
+    plt.legend(loc="best", fontsize="x-large")
+    plt.tight_layout()
+    plt.savefig(output / f"sdsa_enrichment1_rg_overlay_ai_booms_{c_val:.2f}.pdf", dpi=300)
+    plt.show()
+
+    # -------------------------
     # Snowball overlay (historical + simulated)
     # -------------------------
     plt.figure(figsize=(11,7))
@@ -1074,8 +1109,9 @@ for lbl in target_labels:
         linewidth=1.5,
         alpha=1
     )
+plt.axvline(x=0.0, color="black", linestyle="--", linewidth=1.2, alpha=0.8)
 # historical distribution (bold black)
-sns.histplot(
+'''sns.histplot(
     historical_changes,
     label="Historical",
     stat="density",
@@ -1084,7 +1120,7 @@ sns.histplot(
     linewidth=3.0,
     alpha=1,
     color="black"
-)
+)'''
 plt.title("")
 plt.xlabel("10-year change in Debt/GDP (percentage points)")
 plt.ylabel("Density")

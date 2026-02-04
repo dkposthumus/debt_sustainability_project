@@ -279,8 +279,7 @@ ax.axvline(
     linewidth=1.6,
     label="Zero Change Line",
 )
-ax.set_title("10-Year in Debt/GDP by Level of Congressional Responsibility", 
-             fontsize='x-large')
+ax.set_title("")
 ax.set_xlabel("10-year Change in Debt/GDP (percentage points)")
 ax.set_ylabel("Density")
 ax.legend(fontsize='large', loc='best')
