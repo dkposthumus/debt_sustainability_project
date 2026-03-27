@@ -56,48 +56,54 @@ def _sg_deriv(series, window=9, poly=2, deriv=1, use_log=False):
     )
 
 # -------------------------------------------------
+# Configuration: year ranges and initial conditions
+# -------------------------------------------------
+HIST_START  = 2000     # start of historical debt series
+HIST_END    = 2025     # last year of observed data
+PROJ_START  = 2026     # first year of CBO projection window
+PROJ_END    = 2035     # last year of CBO projection window
+SIM_START   = 2026     # calendar year the simulation begins
+
+# -------------------------------------------------
 # Inputs for Enrichment 1 (growth baseline and s path)
 # -------------------------------------------------
+# Load master projections once
+master_proj = pd.read_csv(clean_data / 'master_projections_cleaned.csv')
+master_proj['year'] = pd.to_datetime(master_proj['date']).dt.year
+proj_mask = (master_proj['year'] >= PROJ_START) & (master_proj['year'] <= PROJ_END)
+
 # CBO growth baseline -> a_ug (levels, decimal)
-cbo_forecasts = pd.read_csv(clean_data / 'master_projections_cleaned.csv')
-cbo_forecasts['year'] = pd.to_datetime(cbo_forecasts['date']).dt.year
-cbo_forecasts = (cbo_forecasts.groupby('year')['g (cbo baseline)']
+cbo_forecasts = (master_proj[proj_mask].groupby('year')['g (cbo baseline)']
                  .mean().reset_index())
-cbo_forecasts = cbo_forecasts[(cbo_forecasts['year'] >= 2025) &
-                              (cbo_forecasts['year'] <= 2035)]
 a_ug = (cbo_forecasts['g (cbo baseline)'].values) / 100.0
+
+# CBO interest rate baseline -> a_ur (levels, decimal)
+cbo_rates = (master_proj[proj_mask].groupby('year')['r (cbo baseline)']
+             .mean().reset_index())
+a_ur = (cbo_rates['r (cbo baseline)'].values) / 100.0
 
 # read in higher TFP growth scenario from CBO updated values
 cbo_ai = pd.read_excel(clean_data / 'cbo_ai_projections.xlsx', sheet_name='higher_tfp_data')
-cbo_ai = cbo_ai[(cbo_ai['year'] >= 2025) &
-                              (cbo_ai['year'] <= 2035)]
-# now estimate percent change in real GDP
+cbo_ai = cbo_ai[(cbo_ai['year'] >= PROJ_START) &
+                (cbo_ai['year'] <= PROJ_END)]
 a_ug_ai = (cbo_ai['g (cbo ai)'].values) / 100.0
 
 # Senate TBL baseline for s -> a_s (levels, decimal)
-forecasts = pd.read_csv(clean_data / 'master_projections_cleaned.csv')
-forecasts['year'] = pd.to_datetime(forecasts['date']).dt.year
-a_s_alternative = (forecasts.groupby('year')['s (cbo baseline)']
-             .mean().reset_index())
-a_s_alternative = a_s_alternative[(a_s_alternative['year'] >= 2025) &
-                      (a_s_alternative['year'] <= 2035)]
+a_s_alternative = (master_proj[proj_mask].groupby('year')['s (cbo baseline)']
+                   .mean().reset_index())
 a_s_alternative = (a_s_alternative['s (cbo baseline)'].values) / 100.0
-forecasts = (forecasts.groupby('year')['s (tbl senate, permanent)']
-             .mean().reset_index())
-forecasts = forecasts[(forecasts['year'] >= 2025) &
-                      (forecasts['year'] <= 2035)]
-a_s = (forecasts['s (tbl senate, permanent)'].values) / 100.0
+
+a_s_df = (master_proj[proj_mask].groupby('year')['s (tbl senate, permanent)']
+          .mean().reset_index())
+a_s = (a_s_df['s (tbl senate, permanent)'].values) / 100.0
 
 debt_hist = get_fred_series('FYGFGDQ188S', 'debt_pct_gdp')
-debt_hist = debt_hist[debt_hist['date'] >= '2000-01-01'].copy()
-# FYGFGDQ188S is percent of GDP; convert to ratio to match model b
+debt_hist = debt_hist[debt_hist['date'] >= f'{HIST_START}-01-01'].copy()
 debt_hist['b_hist'] = debt_hist['debt_pct_gdp'] / 100.0
-# Use Q4 (October) as your "annual" observation, consistent with your 10y change code
 debt_hist = debt_hist[debt_hist['date'].dt.month == 10].copy()
 debt_hist['calendar_year'] = debt_hist['date'].dt.year
-# Keep 2000–2025 (inclusive)
-debt_hist = debt_hist[(debt_hist['calendar_year'] >= 2000) &
-                      (debt_hist['calendar_year'] <= 2025)][['calendar_year', 'b_hist']].dropna()
+debt_hist = debt_hist[(debt_hist['calendar_year'] >= HIST_START) &
+                      (debt_hist['calendar_year'] <= HIST_END)][['calendar_year', 'b_hist']].dropna()
 
 growth = get_fred_series('A191RL1Q225SBEA', 'gdp_growth_rate') # quarterly, percent (real)
 interest = get_fred_series('REAINTRATREARAT10Y', 'interest_rate') # monthly, percent (real)
@@ -105,30 +111,30 @@ snowball_hist = growth.merge(interest, on='date', how='outer')
 # convert to calendar year
 snowball_hist = snowball_hist[snowball_hist['date'].dt.month == 10].copy()
 snowball_hist['calendar_year'] = snowball_hist['date'].dt.year
-snowball_hist = snowball_hist[(snowball_hist['calendar_year'] >= 2000) &
-                                (snowball_hist['calendar_year'] <= 2025)].copy()
+snowball_hist = snowball_hist[(snowball_hist['calendar_year'] >= HIST_START) &
+                                (snowball_hist['calendar_year'] <= HIST_END)].copy()
 snowball_hist = debt_hist.merge(snowball_hist, on='calendar_year', how='left')
 snowball_hist['snowball'] = (snowball_hist['interest_rate'] - snowball_hist['gdp_growth_rate']) / 100.0 * snowball_hist['b_hist']
 
 # -------------------------------------------------
-# Core simulator (FIRST-DIFFERENCE r law)
+# Core simulator (CBO-baseline r with debt feedback)
 # -------------------------------------------------
 def simulate_scenario(
     c_val,
-    a_s_vec, a_ug,
-    r_star, beta_r, rho, sigma,
+    a_s_vec, a_ug, a_ur,
+    beta_r, rho, sigma,
     s_g, s_x, s_r, s_s,
-    x0=0.0, r0=None, b0=0.9656,
+    x0=0.0, r_av0=None, b0=0.9818154,
     n_years=10, n_simulations=20000, label=""
 ):
     """
     Fully-enriched SDSA:
-      - g_t = a_ug[t] + x_t + e_g
+      - g_t = a_ug[t] + x_t + e_g           (CBO growth baseline + random walk + shock)
       - x_t random walk
-      - r_t uses FIRST-DIFFERENCE law:
-            Δr_t = β_r(Δb_{t-1} - ρΔb_{t-2}) + ρΔr_{t-1} + η_t,  η_t = ε_t - ε_{t-1}
-        with r_t = r_{t-1} + Δr_t
-      - r_av,t = σ r_av,t-1 + (1-σ) r_t
+      - r_t = a_ur[t] + z_t                  (CBO rate baseline + deviation)
+        where z_t evolves via first-difference debt feedback:
+            Δz_t = β_r(Δb_{t-1} - ρΔb_{t-2}) + ρΔz_{t-1} + η_t,  η_t = ε_t - ε_{t-1}
+      - r_av,t = σ r_av,t-1 + (1-σ) r_t     (pass-through to avg rate on debt)
       - s_t = (1-c) a_s[t] + c (r_av,t - g_t) b_{t-1} + e_s
       - b_t = b_{t-1} + ((r_av,t - g_t)/(1+g_t)) b_{t-1} - s_t
     """
@@ -138,6 +144,7 @@ def simulate_scenario(
         # state arrays
         x   = np.zeros(n_years)
         g   = np.zeros(n_years)
+        z   = np.zeros(n_years)   # deviation of r from CBO baseline
         r   = np.zeros(n_years)
         r_av= np.zeros(n_years)
         s   = np.zeros(n_years)
@@ -146,39 +153,36 @@ def simulate_scenario(
         # shocks (draw on the fly; we only need last ε for η_t)
         eps_r_prev = 0.0
 
-        # initials
+        # initials: year 0 = first forecast year (2026), b0 = 2025 observed debt
         x[0]   = x0
         g[0]   = a_ug[0] + x[0] + np.random.normal(0, s_g)
-        r[0]   = r0 if r0 is not None else r_star
-        r_av[0]= r[0]
-        b[0]   = b0
-        s[0]   = (1 - c_val) * a_s_vec[0] + c_val * (r_av[0] - g[0]) * b[0] + np.random.normal(0, s_s)
-
-        # update b[1] once we have g[0], r_av[0], s[0]
-        # (note: main loop starts at t=1, so b[1] will be computed there)
+        z[0]   = 0.0              # no deviation from CBO baseline at start
+        r[0]   = a_ur[0] + z[0]
+        r_av[0]= r_av0 if r_av0 is not None else r[0]
+        s[0]   = (1 - c_val) * a_s_vec[0] + c_val * (r_av[0] - g[0]) * b0 + np.random.normal(0, s_s)
+        b[0]   = b0 + ((r_av[0] - g[0]) / (1.0 + g[0])) * b0 - s[0]
 
         for t in range(1, n_years):
             # shocks
             e_g = np.random.normal(0, s_g)
             e_x = np.random.normal(0, s_x)
-            eps_r = np.random.normal(0, s_r)   # ε_t for r
+            eps_r = np.random.normal(0, s_r)
             e_s = np.random.normal(0, s_s)
 
             # x, g
             x[t] = x[t-1] + e_x
             g[t] = a_ug[t] + x[t] + e_g
 
-            # compute debt BEFORE r update? we need Δb_{t-1} and Δb_{t-2} for r
-            # ensure b[t-1] is already set (it is from previous iteration)
-            # build deltas for r law
-            db_t_1 = (b[t-1] - b[t-2]) if t >= 2 else 0.0       # Δb_{t-1}
-            db_t_2 = (b[t-2] - b[t-3]) if t >= 3 else 0.0       # Δb_{t-2}
-            dr_t_1 = (r[t-1] - r[t-2]) if t >= 2 else 0.0       # Δr_{t-1}
-            eta_t  = eps_r - eps_r_prev                          # MA(1) innovation
+            # debt feedback on r deviation (z)
+            db_t_1 = (b[t-1] - b[t-2]) if t >= 2 else 0.0
+            db_t_2 = (b[t-2] - b[t-3]) if t >= 3 else 0.0
+            dz_t_1 = (z[t-1] - z[t-2]) if t >= 2 else 0.0
+            eta_t  = eps_r - eps_r_prev
 
-            # FIRST-DIFFERENCE r update
-            dr_t = beta_r * (db_t_1 - rho * db_t_2) + rho * dr_t_1 + eta_t
-            r[t] = r[t-1] + dr_t
+            # first-difference law on deviations from CBO baseline
+            dz_t = beta_r * (db_t_1 - rho * db_t_2) + rho * dz_t_1 + eta_t
+            z[t] = z[t-1] + dz_t
+            r[t] = a_ur[t] + z[t]
 
             # pass-through to average rate paid on debt
             r_av[t] = sigma * r_av[t-1] + (1.0 - sigma) * r[t]
@@ -216,9 +220,8 @@ np.random.seed(42)
 # horizons and baseline levels
 n_years = len(a_ug)
 n_sims  = 5000
-b0      = 0.9656
-r_star  = 0.01
-r0      = 0.02
+b0      = 0.9818154
+r_av0   = 0.0125    # initial r_av: 2025 effective rate on existing debt
 
 # stochastic vols
 s_g = 0.005
@@ -264,12 +267,19 @@ def _band_by_year(df, var, time_col="calendar_year"):
 
 
 def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
-                       r_star: float, b0: float,
+                       b0: float, r_av0: float,
                        debt_hist: pd.DataFrame,
                        snowball_hist: pd.DataFrame,
-                       sim_start_year: int = 2025):
+                       sim_start_year: int = SIM_START):
 
     graphics_path.mkdir(parents=True, exist_ok=True)
+
+    # 2025 anchor values from historical data (for connecting lines)
+    anchor_year = sim_start_year - 1
+    hist_2025 = snowball_hist[snowball_hist['calendar_year'] == anchor_year]
+    anchor_rg = (hist_2025['interest_rate'].values[0] - hist_2025['gdp_growth_rate'].values[0]) / 100.0 if len(hist_2025) > 0 else 0.0
+    anchor_snowball = hist_2025['snowball'].values[0] if len(hist_2025) > 0 else 0.0
+    anchor_g = hist_2025['gdp_growth_rate'].values[0] / 100.0 if len(hist_2025) > 0 else 0.0
 
     ylim_store = {k: [] for k in ['g','r_av','rg','b','slope','curvature','interest_share','snowball']}
     enriched = {}
@@ -284,8 +294,30 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
             lambda s: _sg_deriv(s, window=5, poly=2, deriv=2))
         df_sim['interest_share'] = df_sim['r_av'] * df_sim.groupby('sim')['b'].shift(1).fillna(b0)
         df_sim['snowball'] = (df_sim['r_av'] - df_sim['g']) * df_sim.groupby('sim')['b'].shift(1).fillna(b0)
+
+        # Prepend a 2025 anchor row for each sim so projected lines connect to history
+        sims = df_sim['sim'].unique()
+        anchor_rows = pd.DataFrame({
+            'year': 0,
+            'sim': sims,
+            'b': b0,
+            'r': anchor_rg + anchor_g,  # approximate r from historical r-g + g
+            'r_av': r_av0,
+            'g': anchor_g,
+            's': 0.0,
+            'c': df_sim['c'].iloc[0],
+            'label': df_sim['label'].iloc[0],
+            'calendar_year': anchor_year,
+            'rg': anchor_rg,
+            'slope': np.nan,
+            'curvature': np.nan,
+            'interest_share': r_av0 * b0,
+            'snowball': anchor_snowball,
+        })
+        df_sim = pd.concat([anchor_rows, df_sim], ignore_index=True)
+
         for var in ylim_store:
-            ylim_store[var].extend(df_sim[var].values)
+            ylim_store[var].extend(df_sim[var].dropna().values)
 
         enriched[label] = df_sim
 
@@ -305,14 +337,14 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
                 debt_hist["calendar_year"], debt_hist["b_hist"],
                 color="black", linewidth=3.0, label="Historical (FRED, 2000–2025)"
             )
-            plt.axvline(sim_start_year, color="black", linestyle="--", linewidth=0.9, alpha=0.8,
+            plt.axvline(sim_start_year - 1, color="black", linestyle="--", linewidth=0.9, alpha=0.8,
                     label="_nolegend_")
         if var == "snowball":
             plt.plot(
                 snowball_hist["calendar_year"], snowball_hist["snowball"],
                 color="black", linewidth=3.0, label="Historical (2000–2025)"
             )
-            plt.axvline(sim_start_year, color="black", linestyle="--", linewidth=0.9, alpha=0.8,
+            plt.axvline(sim_start_year - 1, color="black", linestyle="--", linewidth=0.9, alpha=0.8,
                         label="_nolegend_")
         for label, c_val in d_dict.items():
             df_sim = enriched[label]
@@ -357,7 +389,7 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
             mean_g = df_sim_i['g'].mean()
             if mean_g > 0.028:
                 plt.plot(
-                    range(2025, 2025 + n_years),
+                    df_sim_i['calendar_year'],
                     df_sim_i['g'],
                     color='green', alpha=0.2,
                     label='simulations w/ > 2.8% avg growth' if not high_labeled else ""
@@ -365,7 +397,7 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
                 high_labeled = True
             elif mean_g < 0.0075:
                 plt.plot(
-                    range(2025, 2025 + n_years),
+                    df_sim_i['calendar_year'],
                     df_sim_i['g'],
                     color='red', alpha=0.2,
                     label='simulations w/ < 0.75% avg growth' if not low_labeled else ""
@@ -373,7 +405,7 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
                 low_labeled = True
             else:
                 plt.plot(
-                    range(2025, 2025 + n_years),
+                    df_sim_i['calendar_year'],
                     df_sim_i['g'],
                     color='gray', alpha=0.01,
                     label='all other simulations' if not other_labeled else ""
@@ -389,19 +421,12 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
     plt.savefig(graphics_path / 'sdsa_enrichment1_g_rates_responsible_only.pdf', dpi=300)
     plt.close()
 
-    '''_plot_overlay('r',   # uses r_av internally
-                  'Interest Rate (r_av): Median & IQR — Regimes',
-                  'r_av',
-                  yline=r_star,
-                  ylim_key='r_av',
-                  fname='sdsa_enrichment1_r_av_overlay.pdf')
-
     _plot_overlay('rg',
                   'Interest-Growth Differential (r - g): Median & IQR — Regimes',
                   'r - g',
                   yline=0.0,
                   ylim_key='rg',
-                  fname='sdsa_enrichment1_rg_overlay.pdf')'''
+                  fname='sdsa_enrichment1_rg_overlay.pdf')
 
     _plot_overlay('b',
                   'Debt (b): Median & IQR — Regimes',
@@ -410,27 +435,6 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
                   ylim_key='b',
                   fname='sdsa_enrichment1_b_overlay.pdf')
 
-    '''_plot_overlay('interest_share',
-                  'Interest Share (r_av * b[-1]): Median & IQR — Regimes',
-                  'Interest Share',
-                  yline=0.02,
-                  ylim_key='interest_share',
-                  fname='sdsa_enrichment1_interest_share_overlay.pdf')
-
-    _plot_overlay('slope',
-                  'Slope of Debt (b): Median & IQR — Regimes',
-                  'Slope',
-                  yline=0.0,
-                  ylim_key='slope',
-                  fname='sdsa_enrichment1_slope_overlay.pdf')
-
-    _plot_overlay('curvature',
-                  'Curvature of Debt (b): Median & IQR — Regimes',
-                  'Curvature',
-                  yline=0.0,
-                  ylim_key='curvature',
-                  fname='sdsa_enrichment1_curvature_overlay.pdf')'''
-    
     _plot_overlay(
         'snowball',
         'Snowball term: (r - g) × b',
@@ -442,24 +446,24 @@ def summarize_and_plot(sim_results_by_regime, graphics_path: Path, d_dict: dict,
 
     return enriched  # returns enriched frames in case you want to export
 
-# ---- call it (note we pass d_dict and r_star/b0 so legends/lines show correctly)
+# ---- call it (note we pass d_dict and b0 so legends/lines show correctly)
 sim_results_by_regime = {}
 for label, c_val in d_dict.items():
     for beta_label, beta_r in beta_r_dict.items():
         df_sim = simulate_scenario(
-            c_val=c_val, a_s_vec=a_s, a_ug=a_ug,
-            r_star=r_star, beta_r=beta_r, rho=rho, sigma=sigma,
+            c_val=c_val, a_s_vec=a_s, a_ug=a_ug, a_ur=a_ur,
+            beta_r=beta_r, rho=rho, sigma=sigma,
             s_g=s_g, s_x=s_x, s_r=s_r, s_s=s_s,
-            x0=0.0, r0=r0, b0=b0,
+            x0=0.0, r_av0=r_av0, b0=b0,
             n_years=n_years, n_simulations=n_sims,
             label=f"{label} (β_r={beta_label})"
         )
         sim_results_by_regime[label] = df_sim  # one β shown here
 
 # overlay plots with both regimes + c in legend text
-enriched_frames = summarize_and_plot(sim_results_by_regime, output, d_dict, r_star, b0,
+enriched_frames = summarize_and_plot(sim_results_by_regime, output, d_dict, b0, r_av0,
                                      debt_hist=debt_hist, snowball_hist=snowball_hist,
-                                     sim_start_year=2025)
+                                     sim_start_year=SIM_START)
 # (optional) export
 all_sim_results = pd.concat(enriched_frames.values(), ignore_index=True)
 all_sim_results.to_csv(output / 'sdsa_enrichment1_sim_results.csv', index=False)
@@ -470,26 +474,26 @@ all_sim_results.to_csv(output / 'sdsa_enrichment1_sim_results.csv', index=False)
 
 # Each scenario provides AI GDP paths, growth rates, and changes in primary deficit (% of GDP)
 # Baseline years 2025–2035
-years = np.arange(2025, 2036)
+years = np.arange(PROJ_START, PROJ_END + 1)
 
 # --- 0.5 pp productivity boost ---
 a_ug_ai_05 = np.array([
-    2.125, 1.938, 1.988, 2.088, 2.250,
+    1.938, 1.988, 2.088, 2.250,
     2.411, 2.429, 2.466, 2.466, 2.451, 2.428
 ]) / 100
 change_primary_deficit_pct_gdp_05 = np.array([
-    0.0, -0.019924279, -0.064984957, -0.137927756, -0.246002998,
+    -0.019924279, -0.064984957, -0.137927756, -0.246002998,
     -0.389646498, -0.545737236, -0.710450817, -0.885442132,
     -1.068350832, -1.262290796
 ]) / 100  # convert percentage points to decimals
 
 # --- 1 pp productivity boost ---
 a_ug_ai_10 = np.array([
-    2.125, 2.932, 2.906, 2.923, 2.997,
+    2.932, 2.906, 2.923, 2.997,
     3.064, 3.093, 3.141, 3.150, 3.145, 3.131
 ]) / 100
 change_primary_deficit_pct_gdp_10 = np.array([
-    0.0, -0.182794733, -0.445974749, -0.719954032,
+    -0.182794733, -0.445974749, -0.719954032,
     -1.019645652, -1.331048263, -1.657538639,
     -1.998705119, -2.348575081, -2.715048152,
     -3.097080547
@@ -531,22 +535,50 @@ sim_results_by_ai = {}
 for ai_label, params in ai_scenarios.items():
     for c_label, c_val in c_scenarios.items():
         df_sim = simulate_scenario(
-            c_val=c_val, a_s_vec=params["a_s"], a_ug=params["a_ug"],
-            r_star=r_star, beta_r=beta_r_dict["3 bps"], rho=rho, sigma=sigma,
+            c_val=c_val, a_s_vec=params["a_s"], a_ug=params["a_ug"], a_ur=a_ur,
+            beta_r=beta_r_dict["3 bps"], rho=rho, sigma=sigma,
             s_g=s_g, s_x=s_x, s_r=s_r, s_s=s_s,
-            x0=0.0, r0=r0, b0=b0,
+            x0=0.0, r_av0=r_av0, b0=b0,
             n_years=n_years, n_simulations=n_sims,
             label=f"{ai_label} - {c_label}"
         )
         sim_results_by_ai[f"{ai_label} - {c_label}"] = df_sim
 
+# ---- Precompute anchor values for connecting projections to history ----
+hist_2025_ai = snowball_hist[snowball_hist['calendar_year'] == SIM_START - 1]
+anchor_rg = (hist_2025_ai['interest_rate'].values[0] - hist_2025_ai['gdp_growth_rate'].values[0]) / 100.0 if len(hist_2025_ai) > 0 else 0.0
+anchor_snowball = hist_2025_ai['snowball'].values[0] if len(hist_2025_ai) > 0 else 0.0
+anchor_g = hist_2025_ai['gdp_growth_rate'].values[0] / 100.0 if len(hist_2025_ai) > 0 else 0.0
+
+def _add_anchor_and_calendar(df_sim, sim_start=SIM_START, b0_val=b0,
+                              r_av0_val=r_av0, anchor_snowball_val=anchor_snowball,
+                              anchor_rg_val=anchor_rg, anchor_g_val=anchor_g):
+    """Add calendar_year mapping and prepend 2025 anchor row to each sim."""
+    df = df_sim.copy()
+    df["calendar_year"] = sim_start + df["year"] - 1
+    df['snowball'] = (df['r_av'] - df['g']) * df.groupby('sim')['b'].shift(1).fillna(b0_val)
+    sims = df['sim'].unique()
+    anchor = pd.DataFrame({
+        'year': 0, 'sim': sims,
+        'b': b0_val, 'r_av': r_av0_val, 'g': anchor_g_val,
+        'r': anchor_rg_val + anchor_g_val,
+        's': 0.0, 'c': df['c'].iloc[0], 'label': df['label'].iloc[0],
+        'calendar_year': sim_start - 1,
+        'snowball': anchor_snowball_val,
+    })
+    return pd.concat([anchor, df], ignore_index=True)
+
 # ---- Plot overlays: Debt paths ----
 for c_label, c_val in c_scenarios.items():
     filtered = {k: v for k, v in sim_results_by_ai.items() if c_label in k}
 
+    # Debt overlay
     plt.figure(figsize=(11,7))
+    plt.plot(debt_hist["calendar_year"], debt_hist["b_hist"],
+             color="black", linewidth=3.0, label="Historical")
     for label, df_sim in filtered.items():
-        g = _band_by_year(df_sim, "b")
+        df_a = _add_anchor_and_calendar(df_sim)
+        g = _band_by_year(df_a, "b", time_col="calendar_year")
         plt.plot(g["time"], g["median"], label=label)
         plt.fill_between(g["time"], g["p25"], g["p75"], alpha=0.20)
     plt.axhline(y=b0, color="black", linestyle="--", linewidth=0.9)
@@ -559,11 +591,14 @@ for c_label, c_val in c_scenarios.items():
     plt.savefig(output / f"sdsa_enrichment1_b_overlay_ai_booms_{c_val:.2f}.pdf", dpi=300)
     plt.close()
 
-    # now plot the snowball term
+    # Snowball overlay
     plt.figure(figsize=(11,7))
+    sb = snowball_hist.dropna(subset=["snowball"])
+    plt.plot(sb["calendar_year"], sb["snowball"],
+             color="black", linewidth=3.0, label="Historical")
     for label, df_sim in filtered.items():
-        df_sim['snowball'] = (df_sim['r_av'] - df_sim['g']) * df_sim.groupby('sim')['b'].shift(1).fillna(b0)
-        g = _band_by_year(df_sim, "snowball")
+        df_a = _add_anchor_and_calendar(df_sim)
+        g = _band_by_year(df_a, "snowball", time_col="calendar_year")
         plt.plot(g["time"], g["median"], label=label)
         plt.fill_between(g["time"], g["p25"], g["p75"], alpha=0.20)
     plt.axhline(y=0, color="black", linestyle="--", linewidth=0.9)
@@ -573,7 +608,7 @@ for c_label, c_val in c_scenarios.items():
     plt.legend(loc="best", fontsize="x-large")
     plt.tight_layout()
     plt.savefig(output / f"sdsa_enrichment1_snowball_overlay_ai_booms_{c_val:.2f}.pdf", dpi=300)
-    plt.show()
+    plt.close()
 
 # ---- Optional overlay for growth ----
 plt.figure(figsize=(11,7))
@@ -611,14 +646,6 @@ def compute_ten_year_changes(df: pd.DataFrame) -> np.ndarray:
     return np.array(changes)
 
 # ── collect three scenarios (c = 0.15 only) ──────────────────
-target_labels = [
-    "CBO Baseline - Irresponsible (c=0.00)",
-    "AI Boom (0.5pp Productivity) - Irresponsible (c=0.00)",
-    "CBO Baseline - Responsible (c=0.15)",
-    "AI Boom (1.0pp Productivity) - Very Responsible (c=0.30)",
-    "AI Boom (1.0pp Productivity) - Irresponsible (c=0.00)",
-    "CBO Baseline - Very Responsible (c=0.30)"
-]
 target_labels = [
     "CBO Baseline - Irresponsible (c=0.00)",
     "CBO Baseline - Responsible (c=0.15)",
@@ -770,13 +797,14 @@ plt.tight_layout()
 plt.close()
 
 # now compare the debt accumulation snowball term (r^av - g) / (1 + g) * b[-1] to this same term applied historically
+# effective_r is decimal; real_gdp_growth_rate and debt_held_by_public are in percent → convert
 net_interest_df['debt_snowball_term'] = (
-    (net_interest_df['effective_r'] - net_interest_df['real_gdp_growth_rate']) /
+    (net_interest_df['effective_r'] - net_interest_df['real_gdp_growth_rate'] / 100) /
     (1 + net_interest_df['real_gdp_growth_rate'] / 100)
 ) * (net_interest_df['debt_held_by_public'] / 100)
 plt.figure(figsize=(8,5))
 sns.histplot(
-    net_interest_df['debt_snowball_term'],
+    net_interest_df['debt_snowball_term'] * 100,
     label="Historical",
     stat="density",
     element="step",
@@ -807,10 +835,10 @@ plt.legend(loc='best', fontsize='x-large')
 plt.tight_layout()
 plt.show()
 
-# now compare r_av - g directly
+# now compare r_av - g directly (both in decimal)
 plt.figure(figsize=(8,5))
 sns.histplot(
-    net_interest_df['effective_r'] - net_interest_df['real_gdp_growth_rate'],
+    net_interest_df['effective_r'] - net_interest_df['real_gdp_growth_rate'] / 100,
     label="Historical",
     stat="density",
     element="step",

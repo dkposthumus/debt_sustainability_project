@@ -10,11 +10,11 @@ from scipy import stats                #  for the critical t-value
 
 home = Path.home()
 work_dir = (home / 'debt_sustainability_project')
-data = (work_dir / 'data' / 'sdsa')
-raw_data = (data / 'raw')
-clean_data = (data / 'clean')
+data_dir = (work_dir / 'data' / 'sdsa')
+raw_data = (data_dir / 'raw')
+clean_data = (data_dir / 'clean')
 output = (work_dir / 'output' / 'sdsa' / 'graphics')
-code = Path.cwd() 
+code = Path.cwd()
 
 ################################################################################
 # 1. Define relevant functions
@@ -60,11 +60,11 @@ SHEET     = "1. Quarterly"
 raw = pd.read_excel(
     XL_FILE,
     sheet_name=SHEET,
-    header=None,          # keep *all* rows – we’ll discover the header line
+    header=None,          # keep *all* rows – we'll discover the header line
     engine="openpyxl"     # avoid the warning on default engine change
 )
 def _is_quarter_label(x: str) -> bool:
-    """return True if x looks like ‘YYYYQ#’."""
+    """return True if x looks like 'YYYYQ#'."""
     return isinstance(x, str) and len(x) == 6 and x.endswith(("Q1","Q2","Q3","Q4"))
 hdr_idx = (
     raw
@@ -135,130 +135,89 @@ wide['gdp (cbo baseline)'] = (
 )
 cbo_econ = wide[['date', 'r (cbo baseline)', 'g (cbo baseline)', 'gdp (cbo baseline)']].copy()
 
-XL_PATH   = f"{raw_data}/cbo_budget_projections.xlsx"
-TAB_NAME  = "Table B-1"        # adjust if the sheet is named differently
-TARGETS   = ["Primary deficit (-)", "Debt held by the public"]
-raw = pd.read_excel(XL_PATH, sheet_name=TAB_NAME, header=None, engine="openpyxl")
-# — find the first row that contains the word “Actual” ————————
-hdr_row = (
-    raw.apply(lambda r: r.astype(str).str.contains("Actual", case=False).any(), axis=1)
-       .idxmax()
-)
-df = pd.read_excel(
-    XL_PATH,
-    sheet_name=TAB_NAME,
-    skiprows=hdr_row,   # throw away everything above the header
-    header=0,           # Excel row hdr_row becomes the column names
-    engine="openpyxl"
-)
-# first column contains the item names
-df.rename(columns={df.columns[0]: "variable"}, inplace=True)
-two = (
-    df.loc[df["variable"].isin(TARGETS)]
-      .set_index("variable")            # index = the two variable names
-      .T                                # years become the index
-      .rename_axis("year")
-      .reset_index()
-)
-# column “year” has items like “Actual, 2024”, “2025”, … → extract YYYY
-two["year"] = two["year"].astype(str).str.extract(r"(\d{4})").astype(int)
-cbo_budget = (
-    two
-    .set_index("year")            # optional: make year the index
-    .sort_index()
-    [TARGETS]                     # ensure column order
-)
-dup_idx = [i for i, c in enumerate(cbo_budget.columns)
-           if c == "Primary deficit (-)"]
-# say we want to rename the SECOND copy (index 1 of that list)
-cols = cbo_budget.columns.tolist()      # to a mutable Python list
-cols[dup_idx[1]] = "s (cbo baseline)"   # new name
-cbo_budget.columns = cols  # put the list back
-# repeat for debt_public
-dup_idx = [i for i, c in enumerate(cbo_budget.columns)
-           if c == "Debt held by the public"]
-cols[dup_idx[1]] = "b (cbo baseline)"   # new name
-# now we have the columns we want, but the first copy is still there
-# put the list back
-cbo_budget.columns = cols
-cbo_budget.reset_index(inplace=True)  # make year a column again
-cbo_budget = cbo_budget[['year', 's (cbo baseline)', 'b (cbo baseline)']].copy()
-# now merge cbo_econ and cbo_budget
+XL_PATH = f"{raw_data}/cbo_budget_projections.xlsx"
+
+def _read_cbo_budget_row(sheet, target_label, occurrence=0):
+    """Extract a single row from a CBO budget sheet by matching its label.
+
+    The Feb 2026 CBO file uses a two-row header: 'Actual' on one row, then
+    year numbers (2025, 2026, ...) on the next.  We find the year row and
+    use it as column names.
+
+    Parameters
+    ----------
+    occurrence : int
+        Which match to use (0-indexed). Useful when the same label appears
+        in both "billions of dollars" and "% of GDP" sections.
+    """
+    raw_b = pd.read_excel(XL_PATH, sheet_name=sheet, header=None, engine="openpyxl")
+    # find the row containing year numbers (e.g. 2025, 2026, ...)
+    def _has_years(row):
+        nums = row.dropna().apply(lambda v: str(v).replace('.0', ''))
+        return nums.str.match(r'^\d{4}$').sum() >= 5
+    year_row_idx = raw_b.apply(_has_years, axis=1).idxmax()
+    # build column names from that row
+    year_headers = raw_b.iloc[year_row_idx].tolist()
+    year_headers[0] = "variable"
+    # data starts after the year row
+    df_b = raw_b.iloc[year_row_idx + 1:].copy()
+    df_b.columns = year_headers
+    df_b = df_b.dropna(subset=["variable"], how="all")
+    # skip section headers like "In billions of dollars", "As a percentage of GDP"
+    matches = df_b.loc[df_b["variable"].str.contains(target_label, case=False, na=False)]
+    row = matches.iloc[[occurrence]]
+    row = row.drop(columns=["variable"]).T.reset_index()
+    row.columns = ["year_raw", "value"]
+    row["year"] = row["year_raw"].astype(str).str.replace(r'\.0$', '', regex=True).str.extract(r"(\d{4})")
+    row = row.dropna(subset=["year"])
+    row["year"] = row["year"].astype(int)
+    row["value"] = pd.to_numeric(row["value"], errors="coerce")
+    return row[["year", "value"]].dropna()
+
+# Primary deficit (% of GDP) from Table 1-2 — second occurrence (first is billions)
+s_cbo = _read_cbo_budget_row("Table 1-2", "Primary deficit.*adjusted", occurrence=1)
+s_cbo.rename(columns={"value": "s (cbo baseline)"}, inplace=True)
+
+# Debt held by the public (% of GDP) from Table 1-3 — first "As a percentage of GDP"
+b_cbo = _read_cbo_budget_row("Table 1-3", "As a percentage of GDP", occurrence=0)
+b_cbo.rename(columns={"value": "b (cbo baseline)"}, inplace=True)
+
+cbo_budget = s_cbo.merge(b_cbo, on="year")
 cbo_budget['date'] = pd.to_datetime(cbo_budget['year'].astype(str) + '-01-01')
 master = pd.merge(cbo_econ, cbo_budget, on='date', how='left')
 
 ################################################################################
 ## Load Budget Lab's Deficit and Debt Projections
 ################################################################################
-raw = pd.read_excel(
-    raw_data / 'tbl_senate_passed_projections.xlsx',
-    sheet_name = 'F2',
-    header = 3
-)
-raw.rename(columns = {
-    'Unnamed: 1': 'variable'
-}, inplace=True)
-# reshape long, so that variable are the columns
-long = raw.melt(
-    id_vars = ['variable'],
-    var_name = 'date',
-    value_name = 'value'
-)
-# drop instances where value is nan
-long.dropna(subset=['value'], inplace=True)
-# reshape wide 
-wide = long.pivot_table(
-    index = 'date',
-    columns = 'variable',
-    values = 'value'
-).reset_index()
-wide.rename(columns = {
+def load_tbl_senate_sheet(sheet, header_row, rename_map, flip_sign=False):
+    """Load a Budget Lab sheet, reshape wide, rename columns, optionally flip sign, add date."""
+    raw_tbl = pd.read_excel(
+        raw_data / 'tbl_senate_passed_projections.xlsx',
+        sheet_name=sheet, header=header_row
+    )
+    raw_tbl.rename(columns={'Unnamed: 1': 'variable'}, inplace=True)
+    long = raw_tbl.melt(id_vars=['variable'], var_name='date', value_name='value')
+    long.dropna(subset=['value'], inplace=True)
+    wide = long.pivot_table(index='date', columns='variable', values='value').reset_index()
+    wide.rename(columns=rename_map, inplace=True)
+    if flip_sign:
+        for col in rename_map.values():
+            wide[col] *= -1
+    wide['date'] = pd.to_datetime(wide['date'].astype(str) + '-01-01')
+    return wide[['date'] + list(rename_map.values())].copy()
+
+# F2 = debt levels (positive in source, keep positive)
+tbl_senate_b = load_tbl_senate_sheet('F2', 3, {
     'Senate, as written': 'b (tbl senate, as written)',
-    'Senate, permanent': 'b (tbl senate, permanent)',
-}, inplace=True)
-# each of these are reversed, so multiply by -1
-wide['b (tbl senate, as written)'] *= -1
-wide['b (tbl senate, permanent)'] *= -1
-# convert date into datetime, january 1st
-wide['date'] = pd.to_datetime(wide['date'].astype(str) + '-01-01')
-tbl_senate_b = wide[['date', 'b (tbl senate, as written)', 'b (tbl senate, permanent)']].copy()
-# now merge with cbo_econ
+    'Senate, permanent':  'b (tbl senate, permanent)',
+}, flip_sign=False)
 master = pd.merge(master, tbl_senate_b, on='date', how='outer')
 
-# now pull in deficit projections
-raw = pd.read_excel(
-    raw_data / 'tbl_senate_passed_projections.xlsx',
-    sheet_name = 'F3',
-    header = 2
-)
-raw.rename(columns = {
-    'Unnamed: 1': 'variable'
-}, inplace=True)
-# reshape long, so that variable are the columns
-long = raw.melt(
-    id_vars = ['variable'],
-    var_name = 'date',
-    value_name = 'value'
-)
-# drop instances where value is nan
-long.dropna(subset=['value'], inplace=True)
-# reshape wide 
-wide = long.pivot_table(
-    index = 'date',
-    columns = 'variable',
-    values = 'value'
-).reset_index()
-wide.rename(columns = {
+# F3 = deficits (positive in source = deficit; flip to negative = surplus convention)
+tbl_senate_s = load_tbl_senate_sheet('F3', 2, {
     'Senate, as written': 's (tbl senate, as written)',
-    'Senate, permanent': 's (tbl senate, permanent)',
-}, inplace=True)
-# each of these are reversed, so multiply by -1 
-wide['s (tbl senate, as written)'] *= -1
-wide['s (tbl senate, permanent)'] *= -1
-# convert date into datetime, january 1st
-wide['date'] = pd.to_datetime(wide['date'].astype(str) + '-01-01')
-tbl_senate_s = wide[['date', 's (tbl senate, as written)', 's (tbl senate, permanent)']].copy()
-# now merge with cbo_econ
+    'Senate, permanent':  's (tbl senate, permanent)',
+}, flip_sign=True)
 master = pd.merge(master, tbl_senate_s, on='date', how='outer')
 
 ################################################################################
