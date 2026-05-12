@@ -1,0 +1,27 @@
+# Source: CBO publication 61914, "How Changes in Economic Conditions Might Affect
+# the Federal Budget, 2026 to 2036: An Interactive Tool" (last updated April 21, 2026).
+# Permalink for these inputs:
+#   https://www.cbo.gov/publication/61914?scenario=productivity&inputs1=0,.1,.2,.3,.4,.5,.5,.5,.5,.5,.5
+# Productivity-growth boost relative to Feb 2026 baseline:
+#   inputs1 = 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5  (years 2026-2036)
+# To refresh: open the URL above, copy values from "Productivity Growth (%)" /
+# "Budgetary Effects" / "Economic Effects" sections, and update this CSV.
+# Columns:
+#   year                       - calendar year
+#   real_gdp_growth_user_pct   - real GDP growth, user-specified scenario (percent)
+#   delta_revenues_bn          - change from baseline, $bn
+#   delta_mandatory_bn         - change from baseline, $bn
+#   delta_disc_bn              - change from baseline, $bn (typically 0)
+#   nominal_gdp_user_bn        - nominal GDP, user-specified scenario, calendar year, $bn
+year,real_gdp_growth_user_pct,delta_revenues_bn,delta_mandatory_bn,delta_disc_bn,nominal_gdp_user_bn
+2026,2.4,2,0,0,32290
+2027,1.9,8,0,0,33695
+2028,2.0,20,1,0,35113
+2029,2.1,42,3,0,36577
+2030,2.2,75,6,0,38138
+2031,2.3,119,10,0,39801
+2032,2.3,170,14,0,41534
+2033,2.4,227,19,0,43355
+2034,2.4,289,25,0,45262
+2035,2.4,357,31,0,47266
+2036,2.4,433,39,0,49365

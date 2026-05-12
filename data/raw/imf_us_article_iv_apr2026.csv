@@ -1,0 +1,17 @@
+# IMF Article IV — United States: Selected Economic Indicators, 2024-2031
+# Hand-transcribed from the IMF staff table. Vintage consistent with WEOApr2026all.xlsx.
+# Sign conventions preserved from source (fiscal balance: negative = deficit).
+indicator,2024,2025,2026,2027,2028,2029,2030,2031
+real_gdp_growth_annual,2.8,2.1,2.5,2.2,2.1,1.9,1.8,1.8
+real_gdp_growth_q4q4,2.4,2.0,2.4,2.1,2.1,1.8,1.8,1.8
+output_gap_pct_potential_gdp,0.4,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+unemployment_rate_q4_avg,4.1,4.5,4.3,4.1,3.9,3.9,3.9,3.9
+current_account_balance_pct_gdp,-4.0,-3.7,-3.8,-3.7,-3.6,-3.6,-3.6,-3.6
+fed_funds_rate_eop,4.4,3.6,3.4,3.1,3.1,2.9,2.9,2.9
+ten_year_govt_bond_rate_q4_avg,4.3,4.1,3.9,3.8,3.8,3.8,3.7,3.7
+pce_inflation_q4q4,2.6,2.8,2.8,2.0,2.0,2.0,2.0,2.0
+core_pce_inflation_q4q4,3.0,2.9,2.6,2.0,2.0,2.0,2.0,2.0
+federal_fiscal_balance_pct_gdp,-6.3,-5.9,-6.1,-6.0,-6.3,-5.9,-6.0,-5.8
+federal_debt_held_by_public_pct_gdp,97.4,99.4,100.6,102.6,104.9,107.0,108.7,110.1
+gen_gov_fiscal_balance_pct_gdp,-7.9,-6.8,-7.5,-7.3,-7.5,-7.3,-7.3,-7.2
+gen_gov_gross_debt_pct_gdp,122.3,123.9,125.8,128.7,132.1,135.3,138.5,141.5

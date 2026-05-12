@@ -1,2 +1,30 @@
-/output/sdsa/graphics/sdsa_enrichment1_sim_results.csv
+# Claude harness
 /.claude
+
+# Secrets
+/fred_api_key.txt
+
+# macOS
+.DS_Store
+
+# Large generated simulation output (regenerate via code/03_run_simulations.py)
+/output/figures/sdsa_enrichment1_sim_results.csv
+
+# Generated intermediate (rebuild via code/01_gather_projections.py)
+/data/clean/master_projections_cleaned.csv
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.run.xml
+*-blx.bib
